@@ -3,7 +3,7 @@
  * (c) 2025
  */
 
-import { Resolver, Query, Mutation, Args, ID } from '@nestjs/graphql';
+import { Resolver, Query, Mutation, Args, Int } from '@nestjs/graphql';
 import { UseGuards } from '@nestjs/common';
 import { UserService } from './user.service';
 import { User } from './entities/user.entity';
@@ -26,7 +26,7 @@ export class UserResolver {
 
   @Query(() => User, { description: 'Get a single user by ID (requires auth)' })
   @UseGuards(JwtAuthGuard)
-  async user(@Args('id', { type: () => ID }) id: string): Promise<User> {
+  async user(@Args('id', { type: () => Int }) id: number): Promise<User> {
     return this.userService.findOne(id);
   }
 
@@ -49,7 +49,7 @@ export class UserResolver {
 
   @Mutation(() => Boolean, { description: 'Delete a user by ID (requires auth)' })
   @UseGuards(JwtAuthGuard)
-  async removeUser(@Args('id', { type: () => ID }) id: string): Promise<boolean> {
+  async removeUser(@Args('id', { type: () => Int }) id: number): Promise<boolean> {
     return this.userService.remove(id);
   }
 }

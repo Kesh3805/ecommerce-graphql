@@ -1,0 +1,254 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+//////////////////////////////////////////////////////
+// USERS / STORES / CUSTOMERS
+//////////////////////////////////////////////////////
+
+model User {
+  user_id       Int      @id @default(autoincrement())
+  email         String   @unique
+  name          String
+  password_hash String
+  role          String   @default("STORE_OWNER")
+  status        String   @default("ACTIVE")
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  stores    Store[]
+  customers Customer[]
+}
+
+model Store {
+  store_id Int    @id @default(autoincrement())
+  name     String
+
+  user_id Int
+  user    User @relation(fields: [user_id], references: [user_id])
+
+  products Product[]
+}
+
+model Customer {
+  customer_id Int @id @default(autoincrement())
+
+  user_id Int?
+  user    User? @relation(fields: [user_id], references: [user_id])
+
+  carts  Cart[]
+  orders Order[]
+}
+
+//////////////////////////////////////////////////////
+// CATEGORIES (JSONB)
+//////////////////////////////////////////////////////
+
+model Category {
+  category_id Int    @id @default(autoincrement())
+  name        String
+  parent_id   Int?
+  metadata    Json
+
+  parent   Category?  @relation("CategoryHierarchy", fields: [parent_id], references: [category_id])
+  children Category[] @relation("CategoryHierarchy")
+
+  products ProductCategory[]
+}
+
+model ProductCategory {
+  id Int @id @default(autoincrement())
+
+  product_id  Int
+  category_id Int
+
+  product  Product  @relation(fields: [product_id], references: [product_id], onDelete: Cascade)
+  category Category @relation(fields: [category_id], references: [category_id], onDelete: Cascade)
+
+  @@unique([product_id, category_id])
+}
+
+//////////////////////////////////////////////////////
+// PRODUCTS
+//////////////////////////////////////////////////////
+
+model Product {
+  product_id  Int     @id @default(autoincrement())
+  title       String
+  description String?
+
+  store_id Int
+  store    Store @relation(fields: [store_id], references: [store_id])
+
+  categories ProductCategory[]
+  options    ProductOption[]
+  variants   Variant[]
+  attributes ProductAttributeValue[]
+
+  seo ProductSEO?
+}
+
+//////////////////////////////////////////////////////
+// SEO
+//////////////////////////////////////////////////////
+
+model ProductSEO {
+  product_id       Int     @id
+  handle           String  @unique
+  meta_title       String?
+  meta_description String?
+
+  og_title       String?
+  og_description String?
+  og_image       String?
+
+  product Product @relation(fields: [product_id], references: [product_id], onDelete: Cascade)
+}
+
+//////////////////////////////////////////////////////
+// METAFIELDS (GENERIC)
+//////////////////////////////////////////////////////
+
+model Metafield {
+  id Int @id @default(autoincrement())
+
+  owner_type String
+  owner_id   Int
+
+  key        String
+  value      String?
+  value_json Json?
+}
+
+//////////////////////////////////////////////////////
+// VARIANTS
+//////////////////////////////////////////////////////
+
+model ProductOption {
+  option_id Int    @id @default(autoincrement())
+  name      String
+  position  Int
+
+  product_id Int
+  product    Product @relation(fields: [product_id], references: [product_id], onDelete: Cascade)
+
+  values OptionValue[]
+}
+
+model OptionValue {
+  value_id Int    @id @default(autoincrement())
+  value    String
+
+  option_id Int
+  option    ProductOption @relation(fields: [option_id], references: [option_id], onDelete: Cascade)
+}
+
+model Variant {
+  variant_id Int @id @default(autoincrement())
+
+  product_id Int
+  product    Product @relation(fields: [product_id], references: [product_id], onDelete: Cascade)
+
+  option1_value String?
+  option2_value String?
+  option3_value String?
+
+  sku   String? @unique
+  price Float?
+
+  inventory_item_id Int?
+  inventory_item    InventoryItem? @relation(fields: [inventory_item_id], references: [inventory_item_id])
+
+  cart_items  CartItem[]
+  order_items OrderItem[]
+}
+
+//////////////////////////////////////////////////////
+// INVENTORY
+//////////////////////////////////////////////////////
+
+model InventoryItem {
+  inventory_item_id Int     @id @default(autoincrement())
+  sku               String? @unique
+  tracked           Boolean @default(true)
+
+  levels   InventoryLevel[]
+  variants Variant[]
+}
+
+model InventoryLevel {
+  inventory_level_id Int @id @default(autoincrement())
+  available_quantity Int @default(0)
+
+  inventory_item_id Int
+  inventory_item    InventoryItem @relation(fields: [inventory_item_id], references: [inventory_item_id], onDelete: Cascade)
+}
+
+//////////////////////////////////////////////////////
+// ATTRIBUTES
+//////////////////////////////////////////////////////
+
+model ProductAttributeValue {
+  id Int @id @default(autoincrement())
+
+  product_id Int
+  product    Product @relation(fields: [product_id], references: [product_id], onDelete: Cascade)
+
+  attribute_key String
+  value         String
+}
+
+//////////////////////////////////////////////////////
+// CART
+//////////////////////////////////////////////////////
+
+model Cart {
+  cart_id Int @id @default(autoincrement())
+
+  customer_id Int
+  customer    Customer @relation(fields: [customer_id], references: [customer_id])
+
+  items CartItem[]
+}
+
+model CartItem {
+  cart_item_id Int @id @default(autoincrement())
+  quantity     Int
+
+  cart_id Int
+  cart    Cart @relation(fields: [cart_id], references: [cart_id], onDelete: Cascade)
+
+  variant_id Int
+  variant    Variant @relation(fields: [variant_id], references: [variant_id])
+}
+
+//////////////////////////////////////////////////////
+// ORDERS
+//////////////////////////////////////////////////////
+
+model Order {
+  order_id     Int    @id @default(autoincrement())
+  total_amount Float?
+
+  customer_id Int
+  customer    Customer @relation(fields: [customer_id], references: [customer_id])
+
+  items OrderItem[]
+}
+
+model OrderItem {
+  order_item_id Int @id @default(autoincrement())
+
+  quantity Int
+  price    Float
+
+  order_id Int
+  order    Order @relation(fields: [order_id], references: [order_id], onDelete: Cascade)
+
+  variant_id Int
+  variant    Variant @relation(fields: [variant_id], references: [variant_id])
+}

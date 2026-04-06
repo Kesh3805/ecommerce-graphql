@@ -4,16 +4,16 @@
  */
 
 import { DynamicModule } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigModule } from '@nestjs/config';
 import { GraphQLModule } from '@nestjs/graphql';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { join } from 'path';
 import { LoggerModule } from './common/logger/logger.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
-import { User } from './modules/user/entities/user.entity';
+import { PrismaModule } from './prisma/prisma.module';
 import { HealthController } from './health.controller';
+import { ConfigService } from '@nestjs/config';
 
 export class AppModule {
   static forRoot(): DynamicModule {
@@ -43,26 +43,7 @@ export class AppModule {
           }),
         }),
 
-        TypeOrmModule.forRootAsync({
-          imports: [ConfigModule],
-          inject: [ConfigService],
-          useFactory: (configService: ConfigService) => {
-            const PG_DEFAULT_PORT = 5432;
-            return {
-              type: 'postgres',
-              host: configService.get<string>('DB_HOST', 'localhost'),
-              port: configService.get<number>('DB_PORT', PG_DEFAULT_PORT),
-              username: configService.get<string>('DB_USER', 'postgres'),
-              password: configService.get<string>('DB_PASS', ''),
-              database: configService.get<string>('DB_NAME', 'gk_poc_graphql'),
-              entities: [User],
-              synchronize: configService.get<string>('NODE_ENV') === 'development',
-              logging: configService.get<string>('NODE_ENV') === 'development' ? ['query', 'error'] : ['error'],
-              logger: 'advanced-console',
-            };
-          },
-        }),
-
+        PrismaModule,
         LoggerModule,
         AuthModule,
         UserModule,

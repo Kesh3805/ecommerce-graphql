@@ -27,7 +27,7 @@ export class UserService {
     return this.userRepository.findAll(input);
   }
 
-  async findOne(id: string): Promise<User> {
+  async findOne(id: number): Promise<User> {
     const user = await this.userRepository.findById(id);
     if (!user) {
       throw new NotFoundException(USER_ERRORS.NOT_FOUND);
@@ -43,9 +43,10 @@ export class UserService {
     const hashedPassword = await bcrypt.hash(input.password, APP_CONSTANTS.SALT_ROUNDS);
 
     const user = await this.userRepository.create({
-      ...input,
-      password: hashedPassword,
-      mustChangePassword: false,
+      name: input.name,
+      email: input.email,
+      passwordHash: hashedPassword,
+      role: input.role ?? 'STORE_OWNER',
       status: APP_CONSTANTS.ACTIVE_STATUS,
     });
 
@@ -56,10 +57,10 @@ export class UserService {
   async update(input: UpdateUserInput): Promise<User> {
     const { id, password, ...rest } = input;
 
-    const updateData: Partial<User> = { ...rest };
+    const updateData: { name?: string; email?: string; role?: string; passwordHash?: string } = { ...rest };
 
     if (password) {
-      updateData.password = await bcrypt.hash(password, APP_CONSTANTS.SALT_ROUNDS);
+      updateData.passwordHash = await bcrypt.hash(password, APP_CONSTANTS.SALT_ROUNDS);
     }
 
     const user = await this.userRepository.update(id, updateData);
@@ -67,7 +68,7 @@ export class UserService {
     return user;
   }
 
-  async remove(id: string): Promise<boolean> {
+  async remove(id: number): Promise<boolean> {
     await this.userRepository.delete(id);
     this.logger.log(`User deleted: ${id}`, 'UserService');
     return true;

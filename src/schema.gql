@@ -1,0 +1,95 @@
+# ------------------------------------------------------
+# THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
+# ------------------------------------------------------
+
+type AuthPayload {
+  accessToken: String!
+  expiresIn: String!
+  tokenType: String!
+}
+
+input CreateUserInput {
+  email: String!
+  name: String!
+  password: String!
+  role: UserRole
+}
+
+"""
+A date-time string at UTC, such as 2019-12-03T09:54:33Z, compliant with the date-time format.
+"""
+scalar DateTime
+
+input GetUsersInput {
+  limit: Int = 10
+  page: Int = 1
+  search: String
+}
+
+input LoginInput {
+  email: String!
+  password: String!
+}
+
+type Mutation {
+  """Create a new user"""
+  createUser(input: CreateUserInput!): User!
+
+  """Login with email and password"""
+  login(input: LoginInput!): AuthPayload!
+
+  """Delete a user by ID (requires auth)"""
+  removeUser(id: Int!): Boolean!
+
+  """Update an existing user (requires auth)"""
+  updateUser(input: UpdateUserInput!): User!
+}
+
+type PaginatedUsersResponse {
+  data: [User!]!
+  pagination: PaginationMeta!
+}
+
+type PaginationMeta {
+  hasNextPage: Boolean!
+  hasPrevPage: Boolean!
+  limit: Int!
+  page: Int!
+  total: Int!
+  totalPages: Int!
+}
+
+type Query {
+  """Get currently authenticated user profile"""
+  me: User!
+
+  """Get a single user by ID (requires auth)"""
+  user(id: Int!): User!
+
+  """Get paginated list of users (requires auth)"""
+  users(input: GetUsersInput): PaginatedUsersResponse!
+}
+
+input UpdateUserInput {
+  email: String
+  id: Int!
+  name: String
+  password: String
+  role: UserRole
+}
+
+type User {
+  createdAt: DateTime!
+  email: String!
+  id: Int!
+  name: String!
+  role: String!
+  status: String!
+  updatedAt: DateTime!
+}
+
+"""The role of the user in the system"""
+enum UserRole {
+  ADMIN
+  STORE_OWNER
+}

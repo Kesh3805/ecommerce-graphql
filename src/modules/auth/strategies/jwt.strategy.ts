@@ -11,7 +11,7 @@ import { UserRepository } from '../../user/repository/user.repository';
 import { User } from '../../user/entities/user.entity';
 
 interface JwtPayload {
-  sub: string;
+  sub: number;
   email: string;
   role: string;
 }
