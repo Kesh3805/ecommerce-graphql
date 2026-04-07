@@ -2,10 +2,155 @@
 # THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
 # ------------------------------------------------------
 
+"""Input for adding a product option"""
+input AddProductOptionInput {
+  name: String!
+  position: Int
+  product_id: Int!
+  values: [String!]!
+}
+
+input AddToCartInput {
+  cart_id: Int!
+  quantity: Int!
+  variant_id: Int!
+}
+
+"""Input for adjusting inventory at a location"""
+input AdjustInventoryInput {
+  inventory_item_id: Int!
+  location_id: Int!
+  notes: String
+
+  """Positive or negative quantity adjustment"""
+  quantity: Int!
+  reason: AdjustmentReason!
+}
+
+"""Response for inventory adjustment"""
+type AdjustInventoryResponse {
+  adjustment: InventoryAdjustment!
+  level: InventoryLevelEntity!
+}
+
+enum AdjustmentReason {
+  CORRECTION
+  DAMAGED
+  RECEIVED
+  RESERVED
+  RETURNED
+  SOLD
+  TRANSFER
+  UNRESERVED
+}
+
+input AttachProductMediaInput {
+  alt_text: String
+  is_cover: Boolean
+  position: Int
+  product_id: Int!
+  type: String
+  url: String!
+  variant_id: Int
+}
+
 type AuthPayload {
   accessToken: String!
   expiresIn: String!
   tokenType: String!
+}
+
+"""Response for bulk variant update"""
+type BulkUpdateResponse {
+  updated: Int!
+  variant_ids: [Int!]!
+}
+
+"""Input for bulk updating variant prices"""
+input BulkUpdateVariantPricesInput {
+  compare_at_price: Float
+  price: Float!
+  variant_ids: [Int!]!
+}
+
+type Cart {
+  cart_id: Int!
+  created_at: DateTime!
+  customer_id: String
+  items: [CartItem!]
+  sessions: [CartSession!]
+  status: String!
+  store_id: Int!
+  updated_at: DateTime!
+}
+
+type CartItem {
+  cart_id: Int!
+  cart_item_id: Int!
+  created_at: DateTime!
+  price_snapshot: Float!
+  quantity: Int!
+  sku_snapshot: String
+  title_snapshot: String
+  updated_at: DateTime!
+  variant_id: Int!
+}
+
+type CartSession {
+  cart_id: Int!
+  cart_session_id: Int!
+  created_at: DateTime!
+  expires_at: DateTime!
+  session_key: String!
+}
+
+"""Category entity"""
+type Category {
+  category_id: Int!
+  metadata: String
+  name: String!
+  parent_id: Int
+  slug: String!
+}
+
+input CreateCartInput {
+  customer_id: String
+  store_id: Int!
+}
+
+"""Input for creating a location"""
+input CreateLocationInput {
+  address: String
+  city: String
+  country: String
+  name: String!
+  store_id: Int!
+}
+
+input CreateOrderInput {
+  cart_id: Int!
+  currency: String
+  idempotency_key: String!
+}
+
+"""Input for creating a new product"""
+input CreateProductInput {
+  brand: String
+  category_ids: [Int!]
+  description: String
+  seo: CreateProductSEOInput
+  store_id: Int!
+  title: String!
+}
+
+"""SEO input for product"""
+input CreateProductSEOInput {
+  handle: String!
+  meta_description: String
+  meta_title: String
+  og_description: String
+  og_image: String
+  og_title: String
 }
 
 input CreateUserInput {
@@ -15,15 +160,115 @@ input CreateUserInput {
   role: UserRole
 }
 
+"""Input for creating a single variant manually"""
+input CreateVariantInput {
+  barcode: String
+  compare_at_price: Float
+  cost_price: Float
+
+  """Create inventory item for this variant"""
+  create_inventory: Boolean
+  inventory_policy: InventoryPolicy
+  option1_value: String
+  option2_value: String
+  option3_value: String
+  price: Float
+  product_id: Int!
+  sku: String
+  weight: Float
+  weight_unit: String
+}
+
 """
 A date-time string at UTC, such as 2019-12-03T09:54:33Z, compliant with the date-time format.
 """
 scalar DateTime
 
+enum FulfillmentStatus {
+  FULFILLED
+  PARTIAL
+  UNFULFILLED
+}
+
+"""Input for generating variants from product options"""
+input GenerateVariantsInput {
+  """Create inventory items for variants"""
+  create_inventory: Boolean
+
+  """Default price for all generated variants"""
+  default_price: Float
+  product_id: Int!
+
+  """SKU prefix for generated variants"""
+  sku_prefix: String
+}
+
+"""Response for variant generation"""
+type GenerateVariantsResponse {
+  created: Int!
+  variants: [Variant!]!
+}
+
 input GetUsersInput {
   limit: Int = 10
   page: Int = 1
   search: String
+}
+
+"""Inventory adjustment log entry"""
+type InventoryAdjustment {
+  adjustment_id: Int!
+  created_at: DateTime!
+  inventory_level_id: Int!
+  notes: String
+  quantity: Int!
+  reason: AdjustmentReason!
+}
+
+"""Inventory item with levels across locations"""
+type InventoryItem {
+  created_at: DateTime!
+  inventory_item_id: Int!
+  levels: [InventoryLevelEntity!]
+  sku: String
+
+  """Total available across all locations"""
+  total_available: Int
+
+  """Total reserved across all locations"""
+  total_reserved: Int
+  tracked: Boolean!
+  updated_at: DateTime!
+}
+
+"""Inventory level at a specific location"""
+type InventoryLevelEntity {
+  available_quantity: Int!
+  created_at: DateTime!
+  inventory_item_id: Int!
+  inventory_level_id: Int!
+  location: Location
+  location_id: Int!
+  reserved_quantity: Int!
+  updated_at: DateTime!
+}
+
+enum InventoryPolicy {
+  CONTINUE
+  DENY
+}
+
+"""Location entity for multi-location inventory"""
+type Location {
+  address: String
+  city: String
+  country: String
+  created_at: DateTime!
+  is_active: Boolean!
+  location_id: Int!
+  name: String!
+  store_id: Int!
+  updated_at: DateTime!
 }
 
 input LoginInput {
@@ -32,22 +277,154 @@ input LoginInput {
 }
 
 type Mutation {
+  """Add an option to a product"""
+  addProductOption(input: AddProductOptionInput!): ProductOption!
+  addToCart(input: AddToCartInput!): Cart!
+
+  """Adjust inventory quantity"""
+  adjustInventory(input: AdjustInventoryInput!): AdjustInventoryResponse!
+
+  """Archive a product"""
+  archiveProduct(id: Int!): Product!
+  attachProductMedia(input: AttachProductMediaInput!): ProductMedia!
+
+  """Bulk update variant prices"""
+  bulkUpdateVariantPrices(input: BulkUpdateVariantPricesInput!): BulkUpdateResponse!
+  createCart(input: CreateCartInput!): Cart!
+
+  """Create a new location"""
+  createLocation(input: CreateLocationInput!): Location!
+  createOrder(input: CreateOrderInput!): Order!
+
+  """Create a new product"""
+  createProduct(input: CreateProductInput!): Product!
+
   """Create a new user"""
   createUser(input: CreateUserInput!): User!
+
+  """Create a single variant manually"""
+  createVariant(input: CreateVariantInput!): Variant!
+
+  """Delete a location"""
+  deleteLocation(id: Int!): Boolean!
+
+  """Delete a product by ID"""
+  deleteProduct(id: Int!): Boolean!
+
+  """Delete a variant"""
+  deleteVariant(id: Int!): Boolean!
+
+  """Generate variants from cartesian product of product options"""
+  generateVariants(input: GenerateVariantsInput!): GenerateVariantsResponse!
 
   """Login with email and password"""
   login(input: LoginInput!): AuthPayload!
 
+  """Publish a product (set status to ACTIVE)"""
+  publishProduct(id: Int!): Product!
+  removeFromCart(cartItemId: Int!): Cart!
+
+  """Remove an option from a product"""
+  removeProductOption(optionId: Int!): Boolean!
+
   """Delete a user by ID (requires auth)"""
   removeUser(id: Int!): Boolean!
 
+  """Reserve inventory for an order"""
+  reserveInventory(input: ReserveInventoryInput!): InventoryLevelEntity!
+
+  """Set inventory (alias for setInventoryLevel)"""
+  setInventory(input: SetInventoryLevelInput!): AdjustInventoryResponse!
+
+  """Set inventory level to specific quantity"""
+  setInventoryLevel(input: SetInventoryLevelInput!): AdjustInventoryResponse!
+
+  """Transfer inventory between locations"""
+  transferInventory(input: TransferInventoryInput!): TransferInventoryResponse!
+
+  """Release reserved inventory"""
+  unreserveInventory(input: ReserveInventoryInput!): InventoryLevelEntity!
+  updateCartItem(input: UpdateCartItemInput!): Cart!
+
+  """Update a location"""
+  updateLocation(input: UpdateLocationInput!): Location!
+
+  """Update an existing product"""
+  updateProduct(input: UpdateProductInput!): Product!
+
   """Update an existing user (requires auth)"""
   updateUser(input: UpdateUserInput!): User!
+
+  """Update a variant"""
+  updateVariant(input: UpdateVariantInput!): Variant!
+}
+
+"""Option value"""
+type OptionValue {
+  option_id: Int!
+  position: Int!
+  value: String!
+  value_id: Int!
+}
+
+type Order {
+  created_at: DateTime!
+  currency: String!
+  customer_id: String
+  fulfillment_status: FulfillmentStatus!
+  items: [OrderItem!]
+  order_id: Int!
+  order_number: String!
+  payment_status: PaymentStatus!
+  shipping: Float!
+  status: OrderStatus!
+  store_id: Int!
+  subtotal: Float!
+  tax: Float!
+  total: Float!
+  updated_at: DateTime!
+}
+
+type OrderItem {
+  line_total: Float!
+  order_id: Int!
+  order_item_id: Int!
+  price_snapshot: Float!
+  quantity: Int!
+  sku_snapshot: String
+  title_snapshot: String
+  variant_id: Int!
+}
+
+enum OrderStatus {
+  CANCELLED
+  DRAFT
+  FULFILLED
+  PAID
+  PENDING_PAYMENT
+  REFUNDED
+}
+
+"""Paginated product response"""
+type PaginatedProductsResponse {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  items: [Product!]!
+  limit: Int!
+  page: Int!
+  total: Int!
+  totalPages: Int!
 }
 
 type PaginatedUsersResponse {
   data: [User!]!
   pagination: PaginationMeta!
+}
+
+"""Pagination input"""
+input PaginationInput {
+  limit: Int = 20
+  page: Int = 1
 }
 
 type PaginationMeta {
@@ -59,15 +436,192 @@ type PaginationMeta {
   totalPages: Int!
 }
 
+enum PaymentStatus {
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  PENDING
+  REFUNDED
+}
+
+"""Product entity"""
+type Product {
+  brand: String
+  categories: [Category!]
+  created_at: DateTime!
+  description: String
+  options: [ProductOption!]
+  product_id: Int!
+  published_at: DateTime
+  seo: ProductSEO
+  status: ProductStatus!
+  store_id: Int!
+  title: String!
+  updated_at: DateTime!
+}
+
+"""Filter options for product queries"""
+input ProductFilterInput {
+  category_id: Int
+  search: String
+  status: ProductStatus
+  store_id: Int
+}
+
+type ProductMedia {
+  alt_text: String
+  created_at: DateTime!
+  is_cover: Boolean!
+  media_id: Int!
+  position: Int!
+  product_id: Int!
+  type: String
+  url: String!
+}
+
+"""Product option"""
+type ProductOption {
+  name: String!
+  option_id: Int!
+  position: Int!
+  product_id: Int!
+  values: [OptionValue!]
+}
+
+"""Product SEO metadata"""
+type ProductSEO {
+  handle: String!
+  meta_description: String
+  meta_title: String
+  og_description: String
+  og_image: String
+  og_title: String
+  product_id: Int!
+  product_seo_id: Int!
+}
+
+input ProductSearchInput {
+  limit: Int
+  query: String!
+  store_id: Int!
+}
+
+enum ProductStatus {
+  ACTIVE
+  ARCHIVED
+  DRAFT
+}
+
 type Query {
+  cart(id: Int!): Cart!
+
+  """Get products by category"""
+  categoryProducts(categoryId: Int!, pagination: PaginationInput): PaginatedProductsResponse!
+
+  """Get adjustment history for an inventory level"""
+  inventoryAdjustments(inventoryLevelId: Int!): [InventoryAdjustment!]!
+
+  """Get inventory item with levels"""
+  inventoryItem(id: Int!): InventoryItem!
+
+  """Get inventory levels for a variant"""
+  inventoryLevels(variantId: Int!): [InventoryLevelEntity!]!
+
+  """Get a single location by ID"""
+  location(id: Int!): Location!
+
+  """Get all locations for a store"""
+  locations(storeId: Int!): [Location!]!
+
   """Get currently authenticated user profile"""
   me: User!
+  order(id: Int!): Order!
+
+  """Get a single product by ID"""
+  product(id: Int!): Product!
+
+  """Get a single product by SEO handle"""
+  productByHandle(handle: String!): Product!
+  productMedia(productId: Int!): [ProductMedia!]!
+
+  """Get product variants for storefront"""
+  productVariants(productId: Int!): [Variant!]!
+
+  """Get paginated list of products"""
+  products(filter: ProductFilterInput, pagination: PaginationInput): PaginatedProductsResponse!
+  searchProducts(input: ProductSearchInput!): [Product!]!
 
   """Get a single user by ID (requires auth)"""
   user(id: Int!): User!
 
   """Get paginated list of users (requires auth)"""
   users(input: GetUsersInput): PaginatedUsersResponse!
+
+  """Get a single variant by ID"""
+  variant(id: Int!): Variant!
+
+  """Check if a variant has available stock"""
+  variantAvailability(variantId: Int!): Boolean!
+
+  """Get all variants for a product"""
+  variants(productId: Int!): [Variant!]!
+}
+
+"""Input for reserving inventory"""
+input ReserveInventoryInput {
+  inventory_item_id: Int!
+  location_id: Int!
+  quantity: Int!
+}
+
+"""Input for setting inventory level at a location"""
+input SetInventoryLevelInput {
+  available_quantity: Int!
+  inventory_item_id: Int!
+  location_id: Int!
+  notes: String
+}
+
+"""Input for transferring inventory between locations"""
+input TransferInventoryInput {
+  from_location_id: Int!
+  inventory_item_id: Int!
+  notes: String
+  quantity: Int!
+  to_location_id: Int!
+}
+
+"""Response for inventory transfer"""
+type TransferInventoryResponse {
+  from_level: InventoryLevelEntity!
+  quantity_transferred: Int!
+  to_level: InventoryLevelEntity!
+}
+
+input UpdateCartItemInput {
+  cart_item_id: Int!
+  quantity: Int!
+}
+
+"""Input for updating a location"""
+input UpdateLocationInput {
+  address: String
+  city: String
+  country: String
+  is_active: Boolean
+  location_id: Int!
+  name: String
+}
+
+"""Input for updating a product"""
+input UpdateProductInput {
+  brand: String
+  category_ids: [Int!]
+  description: String
+  product_id: Int!
+  seo: CreateProductSEOInput
+  status: ProductStatus
+  title: String
 }
 
 input UpdateUserInput {
@@ -76,6 +630,20 @@ input UpdateUserInput {
   name: String
   password: String
   role: UserRole
+}
+
+"""Input for updating a variant"""
+input UpdateVariantInput {
+  barcode: String
+  compare_at_price: Float
+  cost_price: Float
+  inventory_policy: InventoryPolicy
+  is_default: Boolean
+  price: Float
+  sku: String
+  variant_id: Int!
+  weight: Float
+  weight_unit: String
 }
 
 type User {
@@ -92,4 +660,29 @@ type User {
 enum UserRole {
   ADMIN
   STORE_OWNER
+}
+
+"""Product variant entity"""
+type Variant {
+  barcode: String
+  compare_at_price: Float
+  cost_price: Float
+  created_at: DateTime!
+  inventory_item: InventoryItem
+  inventory_item_id: Int
+  inventory_policy: InventoryPolicy!
+  is_default: Boolean!
+  option1_value: String
+  option2_value: String
+  option3_value: String
+  price: Float
+  product_id: Int!
+  sku: String
+
+  """Combined option values as display title"""
+  title: String
+  updated_at: DateTime!
+  variant_id: Int!
+  weight: Float
+  weight_unit: String
 }

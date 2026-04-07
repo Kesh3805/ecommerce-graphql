@@ -29,11 +29,7 @@ export class LoggingInterceptor implements NestInterceptor {
             this.logger.logGraphQL(operation, variables, Date.now() - startTime);
           },
           error: (error: Error) => {
-            this.logger.error(
-              `[GQL] Error in ${operation} (${Date.now() - startTime}ms): ${error.message}`,
-              error.stack,
-              'GraphQL',
-            );
+            this.logger.error(`[GQL] Error in ${operation} (${Date.now() - startTime}ms): ${error.message}`, error.stack, 'GraphQL');
           },
         }),
       );

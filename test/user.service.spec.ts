@@ -4,11 +4,11 @@
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { UserService } from '../../src/modules/user/user.service';
-import { UserRepository } from '../../src/modules/user/repository/user.repository';
-import { CustomLoggerService } from '../../src/common/logger/logger.service';
+import { UserService } from '../src/modules/user/user.service';
+import { UserRepository } from '../src/modules/user/repository/user.repository';
+import { CustomLoggerService } from '../src/common/logger/logger.service';
 import { NotFoundException } from '@nestjs/common';
-import { USER_ERRORS } from '../../src/common/constants/constant';
+import { USER_ERRORS } from '../src/common/constants/constant';
 
 const mockUserRepository = {
   findById: jest.fn(),
@@ -52,20 +52,20 @@ describe('UserService', () => {
 
   describe('findOne', () => {
     it('should return a user when found', async () => {
-      const mockUser = { id: 'uuid-1', email: 'test@example.com', name: 'Test User' };
+      const mockUser = { id: 1, email: 'test@example.com', name: 'Test User' };
       mockUserRepository.findById.mockResolvedValue(mockUser);
 
-      const result = await service.findOne('uuid-1');
+      const result = await service.findOne(1);
 
       expect(result).toEqual(mockUser);
-      expect(mockUserRepository.findById).toHaveBeenCalledWith('uuid-1');
+      expect(mockUserRepository.findById).toHaveBeenCalledWith(1);
     });
 
     it('should throw NotFoundException when user not found', async () => {
       mockUserRepository.findById.mockResolvedValue(null);
 
-      await expect(service.findOne('non-existent')).rejects.toThrow(NotFoundException);
-      await expect(service.findOne('non-existent')).rejects.toThrow(USER_ERRORS.NOT_FOUND);
+      await expect(service.findOne(9999)).rejects.toThrow(NotFoundException);
+      await expect(service.findOne(9999)).rejects.toThrow(USER_ERRORS.NOT_FOUND);
     });
   });
 
@@ -73,10 +73,10 @@ describe('UserService', () => {
     it('should return true when user is deleted successfully', async () => {
       mockUserRepository.delete.mockResolvedValue(undefined);
 
-      const result = await service.remove('uuid-1');
+      const result = await service.remove(1);
 
       expect(result).toBe(true);
-      expect(mockUserRepository.delete).toHaveBeenCalledWith('uuid-1');
+      expect(mockUserRepository.delete).toHaveBeenCalledWith(1);
     });
   });
 });
