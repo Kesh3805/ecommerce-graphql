@@ -3,7 +3,9 @@
  * (c) 2025
  */
 
+import { UseGuards } from '@nestjs/common';
 import { Resolver, Query, Mutation, Args, Int } from '@nestjs/graphql';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { VariantService } from './variant.service';
 import { Variant } from './entities';
 import { GenerateVariantsInput, UpdateVariantInput, CreateVariantInput, BulkUpdateVariantPricesInput } from './dto';
@@ -33,21 +35,25 @@ export class VariantResolver {
     return this.variantService.findOne(id);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Mutation(() => Variant, { description: 'Create a single variant manually' })
   async createVariant(@Args('input') input: CreateVariantInput): Promise<Variant> {
     return this.variantService.create(input);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Mutation(() => Variant, { description: 'Update a variant' })
   async updateVariant(@Args('input') input: UpdateVariantInput): Promise<Variant> {
     return this.variantService.update(input);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Mutation(() => Boolean, { description: 'Delete a variant' })
   async deleteVariant(@Args('id', { type: () => Int }) id: number): Promise<boolean> {
     return this.variantService.delete(id);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Mutation(() => GenerateVariantsResponse, {
     description: 'Generate variants from cartesian product of product options',
   })
@@ -55,6 +61,7 @@ export class VariantResolver {
     return this.variantService.generateVariants(input);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Mutation(() => BulkUpdateResponse, { description: 'Bulk update variant prices' })
   async bulkUpdateVariantPrices(@Args('input') input: BulkUpdateVariantPricesInput): Promise<BulkUpdateResponse> {
     return this.variantService.bulkUpdatePrices(input);

@@ -7,6 +7,12 @@ import { AddToCartInput, CreateCartInput, UpdateCartItemInput } from './dto';
 import { Cart, CartItem } from './entities';
 
 const RESERVATION_TTL_MINUTES = 20;
+const SECONDS_PER_MINUTE = 60;
+const MILLISECONDS_PER_SECOND = 1000;
+
+function calculateReservationExpiry(): Date {
+  return new Date(Date.now() + RESERVATION_TTL_MINUTES * SECONDS_PER_MINUTE * MILLISECONDS_PER_SECOND);
+}
 
 @Injectable()
 export class CartService {
@@ -60,16 +66,21 @@ export class CartService {
     const previousQuantity = existing?.quantity ?? 0;
     const deltaQuantity = quantity - previousQuantity;
 
-    if (deltaQuantity > 0) {
-      await this.inventoryService.createReservation({
-        inventory_item_id: variant.inventory_item_id,
-        cart_id,
-        quantity: deltaQuantity,
-        expires_at: new Date(Date.now() + RESERVATION_TTL_MINUTES * 60 * 1000),
-      });
-    }
-
+    // Use a transaction to ensure reservation and cart item update are atomic
     await this.dataSource.transaction(async (manager) => {
+      // Create or release reservation based on quantity change
+      if (deltaQuantity > 0) {
+        await this.inventoryService.createReservationWithManager(manager, {
+          inventory_item_id: variant.inventory_item_id!,
+          cart_id,
+          quantity: deltaQuantity,
+          expires_at: calculateReservationExpiry(),
+        });
+      } else if (deltaQuantity < 0) {
+        // Release excess reservation when quantity is reduced
+        await this.inventoryService.releaseReservationsByCartItemWithManager(manager, cart_id, variant_id, Math.abs(deltaQuantity));
+      }
+
       if (existing) {
         existing.quantity = quantity;
         existing.price_snapshot = Number(variant.price);
@@ -96,13 +107,36 @@ export class CartService {
 
   async updateCartItem(input: UpdateCartItemInput): Promise<Cart> {
     const { cart_item_id, quantity } = input;
-    const cartItem = await this.cartItemRepo.findOne({ where: { cart_item_id } });
+    const cartItem = await this.cartItemRepo.findOne({
+      where: { cart_item_id },
+      relations: { variant: true },
+    });
     if (!cartItem) {
       throw new NotFoundException(`Cart item with ID ${cart_item_id} not found`);
     }
 
-    cartItem.quantity = quantity;
-    await this.cartItemRepo.save(cartItem);
+    const previousQuantity = cartItem.quantity;
+    const deltaQuantity = quantity - previousQuantity;
+
+    // Use a transaction to ensure reservation changes and cart item update are atomic
+    await this.dataSource.transaction(async (manager) => {
+      if (deltaQuantity > 0 && cartItem.variant?.inventory_item_id) {
+        // Increase quantity - create additional reservation
+        await this.inventoryService.createReservationWithManager(manager, {
+          inventory_item_id: cartItem.variant.inventory_item_id,
+          cart_id: cartItem.cart_id,
+          quantity: deltaQuantity,
+          expires_at: calculateReservationExpiry(),
+        });
+      } else if (deltaQuantity < 0) {
+        // Decrease quantity - release excess reservation
+        await this.inventoryService.releaseReservationsByCartItemWithManager(manager, cartItem.cart_id, cartItem.variant_id, Math.abs(deltaQuantity));
+      }
+
+      cartItem.quantity = quantity;
+      await manager.save(CartItem, cartItem);
+    });
+
     return this.findCart(cartItem.cart_id);
   }
 
@@ -112,8 +146,14 @@ export class CartService {
       throw new NotFoundException(`Cart item with ID ${cartItemId} not found`);
     }
 
-    await this.cartItemRepo.delete({ cart_item_id: cartItemId });
-    await this.inventoryService.releaseReservationsByCartItem(cartItem.cart_id, cartItem.variant_id, cartItem.quantity);
-    return this.findCart(cartItem.cart_id);
+    const cartId = cartItem.cart_id;
+
+    // Use a transaction to ensure deletion and reservation release are atomic
+    await this.dataSource.transaction(async (manager) => {
+      await manager.delete(CartItem, { cart_item_id: cartItemId });
+      await this.inventoryService.releaseReservationsByCartItemWithManager(manager, cartItem.cart_id, cartItem.variant_id, cartItem.quantity);
+    });
+
+    return this.findCart(cartId);
   }
 }

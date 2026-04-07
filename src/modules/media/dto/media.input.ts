@@ -9,7 +9,7 @@ export class AttachProductMediaInput {
 
   @Field()
   @IsString()
-  @IsUrl({ require_protocol: true })
+  @IsUrl({ require_protocol: true, require_tld: false })
   url: string;
 
   @Field(() => Int, { nullable: true })

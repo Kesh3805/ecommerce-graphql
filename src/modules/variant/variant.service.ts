@@ -280,7 +280,19 @@ export class VariantService {
     return valueArrays.reduce<string[][]>((acc, values) => acc.flatMap((combo) => values.map((value) => [...combo, value])), [[]]);
   }
 
+  // Allowed table/column combinations for sequence sync to prevent SQL injection
+  private static readonly ALLOWED_TABLE_COLUMNS: ReadonlyMap<string, readonly string[]> = new Map([
+    ['Variant', ['variant_id']],
+    ['InventoryItem', ['inventory_item_id']],
+  ]);
+
   private async syncTableIdSequence(manager: EntityManager, table: string, column: string): Promise<void> {
+    // Validate table and column against whitelist to prevent SQL injection
+    const allowedColumns = VariantService.ALLOWED_TABLE_COLUMNS.get(table);
+    if (!allowedColumns || !allowedColumns.includes(column)) {
+      throw new Error(`Invalid table/column combination: ${table}/${column}`);
+    }
+
     const maxRes = await manager.query(
       `SELECT COALESCE(MAX("${column}"), 0)::int AS max_id FROM public."${table}"`,
     );

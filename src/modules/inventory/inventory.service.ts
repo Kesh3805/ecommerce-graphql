@@ -28,7 +28,22 @@ export class InventoryService {
     @InjectRepository(Variant) private readonly variantRepo: Repository<Variant>,
   ) {}
 
+  // Allowed table/column combinations for sequence sync to prevent SQL injection
+  private static readonly ALLOWED_TABLE_COLUMNS: ReadonlyMap<string, readonly string[]> = new Map([
+    ['InventoryAdjustment', ['adjustment_id']],
+    ['InventoryReservation', ['reservation_id']],
+    ['InventoryLevel', ['inventory_level_id']],
+    ['InventoryItem', ['inventory_item_id']],
+    ['Location', ['location_id']],
+  ]);
+
   private async syncTableIdSequence(manager: EntityManager, table: string, column: string): Promise<void> {
+    // Validate table and column against whitelist to prevent SQL injection
+    const allowedColumns = InventoryService.ALLOWED_TABLE_COLUMNS.get(table);
+    if (!allowedColumns || !allowedColumns.includes(column)) {
+      throw new Error(`Invalid table/column combination: ${table}/${column}`);
+    }
+
     const maxRes = await manager.query(
       `SELECT COALESCE(MAX("${column}"), 0)::int AS max_id FROM public."${table}"`,
     );
@@ -126,6 +141,58 @@ export class InventoryService {
     });
   }
 
+  /**
+   * Create reservation with an existing transaction manager (for atomic operations)
+   */
+  async createReservationWithManager(
+    manager: EntityManager,
+    input: CreateReservationInput,
+  ): Promise<InventoryReservation> {
+    const { inventory_item_id, cart_id, quantity, expires_at } = input;
+
+    const level = await manager
+      .createQueryBuilder(InventoryLevelEntity, 'level')
+      .setLock('pessimistic_write')
+      .where('level.inventory_item_id = :inventoryItemId', { inventoryItemId: inventory_item_id })
+      .orderBy('level.available_quantity', 'DESC')
+      .getOne();
+
+    if (!level) {
+      throw new NotFoundException(`Inventory level not found for item ${inventory_item_id}`);
+    }
+
+    if (level.available_quantity < quantity) {
+      throw new BadRequestException(`Insufficient inventory. Available: ${level.available_quantity}, Requested: ${quantity}`);
+    }
+
+    level.available_quantity -= quantity;
+    level.reserved_quantity += quantity;
+    await manager.save(InventoryLevelEntity, level);
+
+    await this.syncTableIdSequence(manager, 'InventoryAdjustment', 'adjustment_id');
+    await manager.save(
+      InventoryAdjustment,
+      manager.create(InventoryAdjustment, {
+        inventory_level_id: level.inventory_level_id,
+        quantity: -quantity,
+        reason: AdjustmentReason.RESERVED,
+        notes: `Reserved for cart ${cart_id}`,
+      }),
+    );
+
+    await this.syncTableIdSequence(manager, 'InventoryReservation', 'reservation_id');
+
+    return manager.save(
+      InventoryReservation,
+      manager.create(InventoryReservation, {
+        inventory_item_id,
+        cart_id,
+        quantity,
+        expires_at,
+      }),
+    );
+  }
+
   async releaseReservationsByCartItem(cart_id: number, variant_id: number, quantity: number): Promise<void> {
     const variant = await this.variantRepo.findOne({ where: { variant_id } });
     if (!variant?.inventory_item_id) {
@@ -179,6 +246,67 @@ export class InventoryService {
         }
       }
     });
+  }
+
+  /**
+   * Release reservations with an existing transaction manager (for atomic operations)
+   */
+  async releaseReservationsByCartItemWithManager(
+    manager: EntityManager,
+    cart_id: number,
+    variant_id: number,
+    quantity: number,
+  ): Promise<void> {
+    const variant = await manager.findOne(Variant, { where: { variant_id } });
+    if (!variant?.inventory_item_id) {
+      return;
+    }
+
+    const reservations = await manager.find(InventoryReservation, {
+      where: { cart_id, inventory_item_id: variant.inventory_item_id },
+      order: { created_at: 'ASC' },
+    });
+
+    let toRelease = quantity;
+    for (const reservation of reservations) {
+      if (toRelease <= 0) {
+        break;
+      }
+
+      const releaseQty = Math.min(toRelease, reservation.quantity);
+      reservation.quantity -= releaseQty;
+      toRelease -= releaseQty;
+
+      if (reservation.quantity === 0) {
+        await manager.delete(InventoryReservation, { reservation_id: reservation.reservation_id });
+      } else {
+        await manager.save(InventoryReservation, reservation);
+      }
+
+      const level = await manager
+        .createQueryBuilder(InventoryLevelEntity, 'level')
+        .setLock('pessimistic_write')
+        .where('level.inventory_item_id = :inventoryItemId', { inventoryItemId: variant.inventory_item_id })
+        .orderBy('level.reserved_quantity', 'DESC')
+        .getOne();
+
+      if (level) {
+        level.available_quantity += releaseQty;
+        level.reserved_quantity = Math.max(0, level.reserved_quantity - releaseQty);
+        await manager.save(InventoryLevelEntity, level);
+
+        await this.syncTableIdSequence(manager, 'InventoryAdjustment', 'adjustment_id');
+        await manager.save(
+          InventoryAdjustment,
+          manager.create(InventoryAdjustment, {
+            inventory_level_id: level.inventory_level_id,
+            quantity: releaseQty,
+            reason: AdjustmentReason.UNRESERVED,
+            notes: `Released from cart ${cart_id}`,
+          }),
+        );
+      }
+    }
   }
 
   async consumeReservationsForCart(cart_id: number): Promise<void> {

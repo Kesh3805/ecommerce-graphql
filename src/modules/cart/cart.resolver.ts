@@ -1,4 +1,6 @@
+import { UseGuards } from '@nestjs/common';
 import { Args, Int, Mutation, Query, Resolver } from '@nestjs/graphql';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CartService } from './cart.service';
 import { AddToCartInput, CreateCartInput, UpdateCartItemInput } from './dto';
 import { Cart } from './entities';

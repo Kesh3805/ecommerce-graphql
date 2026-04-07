@@ -557,6 +557,9 @@ type Query {
 
   """Get currently authenticated user profile"""
   me: User!
+
+  """Get current user stores"""
+  myStores: [Store!]!
   order(id: Int!): Order!
 
   """Get a single product by ID"""

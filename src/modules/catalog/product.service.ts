@@ -1,7 +1,8 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
 import { ProductStatus } from '../../common/enums/ecommerce.enums';
+import { User } from '../user/entities/user.entity';
 import { CreateProductInput, UpdateProductInput, ProductFilterInput, PaginationInput, AddProductOptionInput, CreateStoreInput } from './dto';
 import { PaginatedProductsResponse } from './dto/product.response';
 import { Category, OptionValue, Product, ProductCategory, ProductOption, ProductSEO, Store } from './entities';
@@ -22,13 +23,74 @@ export class ProductService {
     @InjectRepository(Store) private readonly storeRepo: Repository<Store>,
   ) {}
 
-  async findStores(): Promise<Store[]> {
+  private isAdmin(user?: User): boolean {
+    return user?.role === 'ADMIN';
+  }
+
+  private normalize(value: string | undefined): string {
+    return (value ?? '').trim().toLowerCase();
+  }
+
+  private async findStoresForUser(user: User): Promise<Store[]> {
+    const normalizedUserId = String(user.id);
+    const normalizedEmail = this.normalize(user.email);
+    const firstName = this.normalize(user.name?.split(/\s+/)[0]);
+
+    const allStores = await this.storeRepo.find({ order: { created_at: 'DESC' } });
+
+    const direct = allStores.filter((store) => {
+      const owner = this.normalize(store.owner_user_id);
+      return owner === normalizedUserId || owner === normalizedEmail;
+    });
+
+    if (direct.length > 0) {
+      return direct;
+    }
+
+    if (!firstName) {
+      return [];
+    }
+
+    return allStores.filter((store) => this.normalize(store.name).startsWith(firstName));
+  }
+
+  private async getAccessibleStoreIds(actor?: User): Promise<number[] | null> {
+    if (!actor || this.isAdmin(actor)) {
+      return null;
+    }
+
+    const stores = await this.findStoresForUser(actor);
+    return stores.map((store) => store.store_id);
+  }
+
+  private buildEmptyPage(page: number, limit: number): PaginatedProductsResponse {
+    return {
+      items: [],
+      total: 0,
+      page,
+      limit,
+      totalPages: 1,
+      hasNextPage: false,
+      hasPreviousPage: page > 1,
+    };
+  }
+
+  async findStores(actor?: User): Promise<Store[]> {
+    if (actor && !this.isAdmin(actor)) {
+      return this.findStoresForUser(actor);
+    }
+
     return this.storeRepo.find({
       order: { created_at: 'DESC' },
     });
   }
 
-  async findStore(storeId: number): Promise<Store> {
+  async findStore(storeId: number, actor?: User): Promise<Store> {
+    const accessibleStoreIds = await this.getAccessibleStoreIds(actor);
+    if (accessibleStoreIds && !accessibleStoreIds.includes(storeId)) {
+      throw new ForbiddenException('You do not have access to this store');
+    }
+
     const store = await this.storeRepo.findOne({ where: { store_id: storeId } });
     if (!store) {
       throw new NotFoundException(`Store with ID ${storeId} not found`);
@@ -37,27 +99,45 @@ export class ProductService {
     return store;
   }
 
-  async findCategories(storeId?: number): Promise<Category[]> {
+  async findCategories(storeId?: number, actor?: User): Promise<Category[]> {
+    if (storeId) {
+      await this.findStore(storeId, actor);
+    }
+
     return this.categoryRepo.find({
       order: { name: 'ASC' },
     });
   }
 
-  async createStore(input: CreateStoreInput): Promise<Store> {
+  async createStore(input: CreateStoreInput, actor?: User): Promise<Store> {
+    const ownerUserId = input.owner_user_id || (actor ? String(actor.id) : undefined);
+    if (!ownerUserId) {
+      throw new ConflictException('owner_user_id is required');
+    }
+
     const store = await this.storeRepo.save(
       this.storeRepo.create({
         name: input.name,
-        owner_user_id: input.owner_user_id,
+        owner_user_id: ownerUserId,
       }),
     );
 
-    return this.findStore(store.store_id);
+    return this.findStore(store.store_id, actor);
   }
 
-  async findAll(filter: ProductFilterInput = {}, pagination: PaginationInput = {}): Promise<PaginatedProductsResponse> {
+  async findAll(filter: ProductFilterInput = {}, pagination: PaginationInput = {}, actor?: User): Promise<PaginatedProductsResponse> {
     const page = pagination.page ?? 1;
     const limit = pagination.limit ?? DEFAULT_PAGE_SIZE;
     const skip = (page - 1) * limit;
+    const accessibleStoreIds = await this.getAccessibleStoreIds(actor);
+
+    if (accessibleStoreIds && accessibleStoreIds.length === 0) {
+      return this.buildEmptyPage(page, limit);
+    }
+
+    if (accessibleStoreIds && filter.store_id && !accessibleStoreIds.includes(filter.store_id)) {
+      return this.buildEmptyPage(page, limit);
+    }
 
     const queryBuilder = this.productRepo
       .createQueryBuilder('product')
@@ -70,6 +150,10 @@ export class ProductService {
       .skip(skip)
       .take(limit)
       .distinct(true);
+
+    if (accessibleStoreIds) {
+      queryBuilder.andWhere('product.store_id IN (:...accessibleStoreIds)', { accessibleStoreIds });
+    }
 
     if (filter.store_id) {
       queryBuilder.andWhere('product.store_id = :storeId', { storeId: filter.store_id });
@@ -117,7 +201,9 @@ export class ProductService {
     };
   }
 
-  async findOne(productId: number): Promise<Product> {
+  async findOne(productId: number, actor?: User): Promise<Product> {
+    const accessibleStoreIds = await this.getAccessibleStoreIds(actor);
+
     const product = await this.productRepo.findOne({
       where: { product_id: productId },
       relations: {
@@ -136,6 +222,10 @@ export class ProductService {
       throw new NotFoundException(`Product with ID ${productId} not found`);
     }
 
+    if (accessibleStoreIds && !accessibleStoreIds.includes(product.store_id)) {
+      throw new NotFoundException(`Product with ID ${productId} not found`);
+    }
+
     return {
       ...product,
       categories: (product.category_links ?? []).map((link) => link.category),
@@ -146,20 +236,33 @@ export class ProductService {
     };
   }
 
-  async findByHandle(handle: string): Promise<Product> {
+  async findByHandle(handle: string, actor?: User): Promise<Product> {
     const seo = await this.seoRepo.findOne({ where: { handle } });
     if (!seo) {
       throw new NotFoundException(`Product with handle '${handle}' not found`);
     }
 
-    return this.findOne(seo.product_id);
+    return this.findOne(seo.product_id, actor);
   }
 
-  async findByCategory(categoryId: number, pagination: PaginationInput = {}): Promise<PaginatedProductsResponse> {
-    return this.findAll({ category_id: categoryId }, pagination);
+  async findByCategory(categoryId: number, pagination: PaginationInput = {}, actor?: User): Promise<PaginatedProductsResponse> {
+    return this.findAll({ category_id: categoryId }, pagination, actor);
   }
+
+  // Allowed table/column combinations for sequence sync to prevent SQL injection
+  private static readonly ALLOWED_TABLE_COLUMNS: ReadonlyMap<string, readonly string[]> = new Map([
+    ['ProductCategory', ['id']],
+    ['ProductOption', ['option_id']],
+    ['OptionValue', ['value_id']],
+  ]);
 
   private async syncTableIdSequence(manager: EntityManager, table: string, column: string): Promise<void> {
+    // Validate table and column against whitelist to prevent SQL injection
+    const allowedColumns = ProductService.ALLOWED_TABLE_COLUMNS.get(table);
+    if (!allowedColumns || !allowedColumns.includes(column)) {
+      throw new Error(`Invalid table/column combination: ${table}/${column}`);
+    }
+
     const maxRes = await manager.query(
       `SELECT COALESCE(MAX("${column}"), 0)::int AS max_id FROM public."${table}"`,
     );
@@ -209,9 +312,14 @@ export class ProductService {
     }
   }
 
-  async create(input: CreateProductInput): Promise<Product> {
+  async create(input: CreateProductInput, actor?: User): Promise<Product> {
     const normalizedInput = this.normalizeCreateInput(input);
     const { category_ids, seo, ...productData } = normalizedInput;
+
+    const accessibleStoreIds = await this.getAccessibleStoreIds(actor);
+    if (accessibleStoreIds && !accessibleStoreIds.includes(productData.store_id)) {
+      throw new ForbiddenException('You do not have access to this store');
+    }
 
     const store = await this.storeRepo.findOne({ where: { store_id: productData.store_id } });
     if (!store) {
@@ -291,11 +399,11 @@ export class ProductService {
     });
   }
 
-  async update(input: UpdateProductInput): Promise<Product> {
+  async update(input: UpdateProductInput, actor?: User): Promise<Product> {
     const normalizedInput = this.normalizeUpdateInput(input);
     const { product_id, category_ids, seo, ...productData } = normalizedInput;
 
-    await this.findOne(product_id);
+    await this.findOne(product_id, actor);
 
     return this.dataSource.transaction(async (manager) => {
       if (seo?.handle) {
@@ -375,15 +483,15 @@ export class ProductService {
     });
   }
 
-  async delete(productId: number): Promise<boolean> {
-    await this.findOne(productId);
+  async delete(productId: number, actor?: User): Promise<boolean> {
+    await this.findOne(productId, actor);
     await this.productRepo.delete({ product_id: productId });
     return true;
   }
 
-  async addOption(input: AddProductOptionInput): Promise<ProductOption> {
+  async addOption(input: AddProductOptionInput, actor?: User): Promise<ProductOption> {
     const { product_id, name, values, position } = input;
-    await this.findOne(product_id);
+    await this.findOne(product_id, actor);
 
     const optionCount = await this.optionRepo.count({ where: { product_id } });
     if (optionCount >= MAX_OPTIONS_PER_PRODUCT) {
@@ -430,18 +538,20 @@ export class ProductService {
     });
   }
 
-  async removeOption(optionId: number): Promise<boolean> {
+  async removeOption(optionId: number, actor?: User): Promise<boolean> {
     const option = await this.optionRepo.findOne({ where: { option_id: optionId } });
     if (!option) {
       throw new NotFoundException(`Option with ID ${optionId} not found`);
     }
 
+    await this.findOne(option.product_id, actor);
+
     await this.optionRepo.delete({ option_id: optionId });
     return true;
   }
 
-  async publishProduct(productId: number): Promise<Product> {
-    const product = await this.findOne(productId);
+  async publishProduct(productId: number, actor?: User): Promise<Product> {
+    const product = await this.findOne(productId, actor);
 
     if (product.status === ProductStatus.ACTIVE) {
       throw new ConflictException('Product is already published');
@@ -455,11 +565,11 @@ export class ProductService {
       },
     );
 
-    return this.findOne(productId);
+    return this.findOne(productId, actor);
   }
 
-  async archiveProduct(productId: number): Promise<Product> {
-    await this.findOne(productId);
+  async archiveProduct(productId: number, actor?: User): Promise<Product> {
+    await this.findOne(productId, actor);
 
     await this.productRepo.update(
       { product_id: productId },
@@ -468,7 +578,7 @@ export class ProductService {
       },
     );
 
-    return this.findOne(productId);
+    return this.findOne(productId, actor);
   }
 
   private normalizeSeoInput(seo: CreateProductInput['seo'] | UpdateProductInput['seo']):
