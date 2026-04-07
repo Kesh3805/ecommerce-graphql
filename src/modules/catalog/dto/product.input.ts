@@ -3,7 +3,7 @@
  * (c) 2025
  */
 
-import { InputType, Field, Int } from '@nestjs/graphql';
+import { InputType, Field, GraphQLISODateTime, Int } from '@nestjs/graphql';
 import { IsNotEmpty, IsString, IsOptional, IsInt, IsArray, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ProductStatus } from '../../../common/enums/ecommerce.enums';
@@ -23,7 +23,17 @@ export class CreateProductSEOInput {
   @Field({ nullable: true })
   @IsOptional()
   @IsString()
+  metaTitle?: string;
+
+  @Field({ nullable: true })
+  @IsOptional()
+  @IsString()
   meta_description?: string;
+
+  @Field({ nullable: true })
+  @IsOptional()
+  @IsString()
+  metaDescription?: string;
 
   @Field({ nullable: true })
   @IsOptional()
@@ -33,12 +43,27 @@ export class CreateProductSEOInput {
   @Field({ nullable: true })
   @IsOptional()
   @IsString()
+  ogTitle?: string;
+
+  @Field({ nullable: true })
+  @IsOptional()
+  @IsString()
   og_description?: string;
 
   @Field({ nullable: true })
   @IsOptional()
   @IsString()
+  ogDescription?: string;
+
+  @Field({ nullable: true })
+  @IsOptional()
+  @IsString()
   og_image?: string;
+
+  @Field({ nullable: true })
+  @IsOptional()
+  @IsString()
+  ogImage?: string;
 }
 
 @InputType({ description: 'Input for creating a new product' })
@@ -62,10 +87,32 @@ export class CreateProductInput {
   @IsInt()
   store_id: number;
 
+  @Field(() => Int, { nullable: true })
+  @IsOptional()
+  @IsInt()
+  storeId?: number;
+
   @Field(() => [Int], { nullable: true })
   @IsOptional()
   @IsArray()
   category_ids?: number[];
+
+  @Field(() => [Int], { nullable: true })
+  @IsOptional()
+  @IsArray()
+  categoryIds?: number[];
+
+  @Field(() => ProductStatus, { nullable: true })
+  @IsOptional()
+  status?: ProductStatus;
+
+  @Field(() => GraphQLISODateTime, { nullable: true })
+  @IsOptional()
+  published_at?: Date;
+
+  @Field(() => GraphQLISODateTime, { nullable: true })
+  @IsOptional()
+  publishedAt?: Date;
 
   @Field(() => CreateProductSEOInput, { nullable: true })
   @IsOptional()
@@ -79,6 +126,11 @@ export class UpdateProductInput {
   @Field(() => Int)
   @IsInt()
   product_id: number;
+
+  @Field(() => Int, { nullable: true })
+  @IsOptional()
+  @IsInt()
+  productId?: number;
 
   @Field({ nullable: true })
   @IsOptional()
@@ -103,6 +155,19 @@ export class UpdateProductInput {
   @IsOptional()
   @IsArray()
   category_ids?: number[];
+
+  @Field(() => [Int], { nullable: true })
+  @IsOptional()
+  @IsArray()
+  categoryIds?: number[];
+
+  @Field(() => GraphQLISODateTime, { nullable: true })
+  @IsOptional()
+  published_at?: Date;
+
+  @Field(() => GraphQLISODateTime, { nullable: true })
+  @IsOptional()
+  publishedAt?: Date;
 
   @Field(() => CreateProductSEOInput, { nullable: true })
   @IsOptional()
@@ -166,4 +231,17 @@ export class AddProductOptionInput {
   @IsOptional()
   @IsInt()
   position?: number;
+}
+
+@InputType({ description: 'Input for creating a store' })
+export class CreateStoreInput {
+  @Field()
+  @IsNotEmpty()
+  @IsString()
+  name: string;
+
+  @Field()
+  @IsNotEmpty()
+  @IsString()
+  owner_user_id: string;
 }

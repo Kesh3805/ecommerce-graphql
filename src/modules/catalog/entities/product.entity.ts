@@ -16,7 +16,7 @@ import { ProductStatus } from '../../../common/enums/ecommerce.enums';
 import { Variant } from '../../variant/entities/variant.entity';
 
 @ObjectType()
-@Entity('stores')
+@Entity('Store')
 export class Store {
   @Field(() => Int)
   @PrimaryGeneratedColumn({ name: 'store_id' })
@@ -43,7 +43,7 @@ export class Store {
 }
 
 @ObjectType({ description: 'Category entity' })
-@Entity('categories')
+@Entity('Category')
 @Index(['slug'], { unique: true })
 @Index(['parent_id'])
 export class Category {
@@ -79,7 +79,7 @@ export class Category {
 }
 
 @ObjectType({ description: 'Product entity' })
-@Entity('products')
+@Entity('Product')
 @Index(['store_id'])
 @Index(['status'])
 @Index(['published_at'])
@@ -143,7 +143,7 @@ export class Product {
 }
 
 @ObjectType({ description: 'Product SEO metadata' })
-@Entity('product_seo')
+@Entity('ProductSEO')
 @Index(['handle'], { unique: true })
 export class ProductSEO {
   @Field(() => Int)
@@ -184,7 +184,7 @@ export class ProductSEO {
 }
 
 @ObjectType({ description: 'Product option' })
-@Entity('product_options')
+@Entity('ProductOption')
 @Index(['product_id', 'position'], { unique: true })
 export class ProductOption {
   @Field(() => Int)
@@ -213,7 +213,7 @@ export class ProductOption {
 }
 
 @ObjectType({ description: 'Option value' })
-@Entity('option_values')
+@Entity('OptionValue')
 @Index(['option_id', 'position'], { unique: true })
 export class OptionValue {
   @Field(() => Int)
@@ -237,7 +237,7 @@ export class OptionValue {
   option: Relation<ProductOption>;
 }
 
-@Entity('product_categories')
+@Entity('ProductCategory')
 @Index(['product_id', 'category_id'], { unique: true })
 export class ProductCategory {
   @PrimaryGeneratedColumn({ name: 'id' })

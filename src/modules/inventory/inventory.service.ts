@@ -1,7 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { AdjustmentReason } from '../../common/enums/ecommerce.enums';
+import { Store } from '../catalog/entities';
 import { Variant } from '../variant/entities';
 import { AdjustInventoryInput, CreateLocationInput, ReserveInventoryInput, SetInventoryLevelInput, TransferInventoryInput, UpdateLocationInput } from './dto';
 import { AdjustInventoryResponse, TransferInventoryResponse } from './dto/inventory.response';
@@ -18,6 +19,7 @@ interface CreateReservationInput {
 export class InventoryService {
   constructor(
     private readonly dataSource: DataSource,
+    @InjectRepository(Store) private readonly storeRepo: Repository<Store>,
     @InjectRepository(Location) private readonly locationRepo: Repository<Location>,
     @InjectRepository(InventoryItemEntity) private readonly inventoryItemRepo: Repository<InventoryItemEntity>,
     @InjectRepository(InventoryLevelEntity) private readonly levelRepo: Repository<InventoryLevelEntity>,
@@ -25,6 +27,56 @@ export class InventoryService {
     @InjectRepository(InventoryReservation) private readonly reservationRepo: Repository<InventoryReservation>,
     @InjectRepository(Variant) private readonly variantRepo: Repository<Variant>,
   ) {}
+
+  private async syncTableIdSequence(manager: EntityManager, table: string, column: string): Promise<void> {
+    const maxRes = await manager.query(
+      `SELECT COALESCE(MAX("${column}"), 0)::int AS max_id FROM public."${table}"`,
+    );
+    const nextValue = Number(maxRes[0]?.max_id ?? 0) + 1;
+
+    const serialRes = await manager.query(
+      `SELECT pg_get_serial_sequence('public."${table}"', '${column}') AS seq`,
+    );
+    const serialSeq = serialRes[0]?.seq as string | null;
+
+    const defaultRes = await manager.query(
+      `
+        SELECT column_default
+        FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=$1 AND column_name=$2
+      `,
+      [table, column],
+    );
+
+    const defaultText = (defaultRes[0]?.column_default ?? '') as string;
+    const defaultMatch = defaultText.match(/nextval\('(.+?)'::regclass\)/i);
+    const defaultSeqRaw = defaultMatch?.[1] ?? null;
+
+    const candidateSeqs = new Set<string>();
+    if (serialSeq) {
+      candidateSeqs.add(serialSeq);
+    }
+
+    if (defaultSeqRaw) {
+      candidateSeqs.add(defaultSeqRaw);
+      candidateSeqs.add(defaultSeqRaw.replace(/"/g, ''));
+
+      if (!defaultSeqRaw.includes('.')) {
+        candidateSeqs.add(`public.${defaultSeqRaw}`);
+        const withoutQuotes = defaultSeqRaw.replace(/"/g, '');
+        candidateSeqs.add(`public.${withoutQuotes}`);
+      }
+    }
+
+    for (const seqName of candidateSeqs) {
+      const existsRes = await manager.query('SELECT to_regclass($1) AS reg', [seqName]);
+      if (!existsRes[0]?.reg) {
+        continue;
+      }
+
+      await manager.query('SELECT setval($1, $2, false)', [seqName, nextValue]);
+    }
+  }
 
   async createReservation(input: CreateReservationInput): Promise<InventoryReservation> {
     const { inventory_item_id, cart_id, quantity, expires_at } = input;
@@ -49,6 +101,7 @@ export class InventoryService {
       level.reserved_quantity += quantity;
       await manager.save(InventoryLevelEntity, level);
 
+      await this.syncTableIdSequence(manager, 'InventoryAdjustment', 'adjustment_id');
       await manager.save(
         InventoryAdjustment,
         manager.create(InventoryAdjustment, {
@@ -58,6 +111,8 @@ export class InventoryService {
           notes: `Reserved for cart ${cart_id}`,
         }),
       );
+
+      await this.syncTableIdSequence(manager, 'InventoryReservation', 'reservation_id');
 
       return manager.save(
         InventoryReservation,
@@ -111,6 +166,7 @@ export class InventoryService {
           level.reserved_quantity = Math.max(0, level.reserved_quantity - releaseQty);
           await manager.save(InventoryLevelEntity, level);
 
+          await this.syncTableIdSequence(manager, 'InventoryAdjustment', 'adjustment_id');
           await manager.save(
             InventoryAdjustment,
             manager.create(InventoryAdjustment, {
@@ -143,6 +199,7 @@ export class InventoryService {
           level.reserved_quantity = Math.max(0, level.reserved_quantity - reservation.quantity);
           await manager.save(InventoryLevelEntity, level);
 
+          await this.syncTableIdSequence(manager, 'InventoryAdjustment', 'adjustment_id');
           await manager.save(
             InventoryAdjustment,
             manager.create(InventoryAdjustment, {
@@ -176,7 +233,21 @@ export class InventoryService {
   }
 
   async createLocation(input: CreateLocationInput): Promise<Location> {
-    return this.locationRepo.save(this.locationRepo.create(input));
+    const store = await this.storeRepo.findOne({ where: { store_id: input.store_id } });
+    if (!store) {
+      throw new NotFoundException(`Store with ID ${input.store_id} not found`);
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      await this.syncTableIdSequence(manager, 'InventoryLocation', 'location_id');
+
+      const location = await manager.save(
+        Location,
+        manager.create(Location, input),
+      );
+
+      return location;
+    });
   }
 
   async updateLocation(input: UpdateLocationInput): Promise<Location> {
@@ -240,6 +311,7 @@ export class InventoryService {
         .getOne();
 
       if (!level) {
+        await this.syncTableIdSequence(manager, 'InventoryLevel', 'inventory_level_id');
         level = await manager.save(
           InventoryLevelEntity,
           manager.create(InventoryLevelEntity, {
@@ -259,6 +331,7 @@ export class InventoryService {
       level.available_quantity = newQuantity;
       const updatedLevel = await manager.save(InventoryLevelEntity, level);
 
+      await this.syncTableIdSequence(manager, 'InventoryAdjustment', 'adjustment_id');
       const adjustment = await manager.save(
         InventoryAdjustment,
         manager.create(InventoryAdjustment, {
@@ -299,6 +372,7 @@ export class InventoryService {
       const adjustmentQuantity = available_quantity - previousQuantity;
 
       if (!level) {
+        await this.syncTableIdSequence(manager, 'InventoryLevel', 'inventory_level_id');
         level = manager.create(InventoryLevelEntity, {
           inventory_item_id,
           location_id,
@@ -311,6 +385,7 @@ export class InventoryService {
 
       const savedLevel = await manager.save(InventoryLevelEntity, level);
 
+      await this.syncTableIdSequence(manager, 'InventoryAdjustment', 'adjustment_id');
       const adjustment = await manager.save(
         InventoryAdjustment,
         manager.create(InventoryAdjustment, {
@@ -356,6 +431,7 @@ export class InventoryService {
       level.reserved_quantity += quantity;
       const saved = await manager.save(InventoryLevelEntity, level);
 
+      await this.syncTableIdSequence(manager, 'InventoryAdjustment', 'adjustment_id');
       await manager.save(
         InventoryAdjustment,
         manager.create(InventoryAdjustment, {
@@ -396,6 +472,7 @@ export class InventoryService {
       level.reserved_quantity -= quantity;
       const saved = await manager.save(InventoryLevelEntity, level);
 
+      await this.syncTableIdSequence(manager, 'InventoryAdjustment', 'adjustment_id');
       await manager.save(
         InventoryAdjustment,
         manager.create(InventoryAdjustment, {
@@ -448,6 +525,7 @@ export class InventoryService {
         .getOne();
 
       if (!toLevel) {
+        await this.syncTableIdSequence(manager, 'InventoryLevel', 'inventory_level_id');
         toLevel = await manager.save(
           InventoryLevelEntity,
           manager.create(InventoryLevelEntity, {
@@ -466,6 +544,7 @@ export class InventoryService {
       const updatedToLevel = await manager.save(InventoryLevelEntity, toLevel);
 
       const transferNote = notes ?? `Transfer of ${quantity} units`;
+      await this.syncTableIdSequence(manager, 'InventoryAdjustment', 'adjustment_id');
       await manager.save(InventoryAdjustment, [
         manager.create(InventoryAdjustment, {
           inventory_level_id: fromLevel.inventory_level_id,

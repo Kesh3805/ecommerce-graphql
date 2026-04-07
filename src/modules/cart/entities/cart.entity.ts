@@ -3,7 +3,7 @@ import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, OneToMa
 import { Variant } from '../../variant/entities';
 
 @ObjectType()
-@Entity('carts')
+@Entity('Cart')
 @Index(['store_id', 'customer_id'])
 @Index(['status'])
 export class Cart {
@@ -41,7 +41,7 @@ export class Cart {
 }
 
 @ObjectType()
-@Entity('cart_items')
+@Entity('CartItem')
 @Index(['cart_id', 'variant_id'], { unique: true })
 export class CartItem {
   @Field(() => Int)
@@ -90,7 +90,7 @@ export class CartItem {
 }
 
 @ObjectType()
-@Entity('cart_sessions')
+@Entity('CartSession')
 @Index(['session_key'], { unique: true })
 @Index(['expires_at'])
 export class CartSession {

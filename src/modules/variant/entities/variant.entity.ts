@@ -17,7 +17,7 @@ import { Product } from '../../catalog/entities/product.entity';
 import { InventoryItem } from '../../inventory/entities/inventory.entity';
 
 @ObjectType({ description: 'Product variant entity' })
-@Entity('variants')
+@Entity('Variant')
 @Index(['product_id'])
 @Index(['sku'], { unique: true, where: 'sku IS NOT NULL' })
 @Index(['product_id', 'option1_value', 'option2_value', 'option3_value'], { unique: true })
@@ -106,7 +106,7 @@ export class Variant {
   selections?: Relation<VariantOptionSelection[]>;
 }
 
-@Entity('variant_option_selections')
+@Entity('VariantOptionSelection')
 @Index(['variant_id', 'option_id'], { unique: true })
 export class VariantOptionSelection {
   @PrimaryGeneratedColumn({ name: 'selection_id' })

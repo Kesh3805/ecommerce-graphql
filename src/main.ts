@@ -3,18 +3,21 @@
  * (c) 2025
  */
 
+import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
+import { join } from 'path';
 import { AppModule } from './app.module';
 import { CustomLoggerService } from './common/logger/logger.service';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 
 const DEFAULT_PORT = 3000;
-const PORT = process.env.PORT || DEFAULT_PORT;
+const PORT = Number(process.env.PORT) || DEFAULT_PORT;
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule.forRoot());
+  const app = await NestFactory.create<NestExpressApplication>(AppModule.forRoot());
 
   const logger = new CustomLoggerService();
   app.useLogger(logger);
@@ -45,6 +48,10 @@ async function bootstrap(): Promise<void> {
   // Health check REST endpoint prefix exclusion
   app.setGlobalPrefix('api', {
     exclude: ['/', 'health'],
+  });
+
+  app.useStaticAssets(join(process.cwd(), 'uploads'), {
+    prefix: '/uploads/',
   });
 
   await app.listen(PORT);

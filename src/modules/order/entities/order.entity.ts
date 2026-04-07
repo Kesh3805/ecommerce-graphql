@@ -3,7 +3,7 @@ import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, OneToMa
 import { FulfillmentStatus, OrderStatus, PaymentStatus } from '../../../common/enums/ecommerce.enums';
 
 @ObjectType()
-@Entity('orders')
+@Entity('Order')
 @Index(['store_id', 'created_at'])
 @Index(['status'])
 export class Order {
@@ -72,7 +72,7 @@ export class Order {
 }
 
 @ObjectType()
-@Entity('order_items')
+@Entity('OrderItem')
 @Index(['order_id'])
 export class OrderItem {
   @Field(() => Int)
@@ -113,7 +113,7 @@ export class OrderItem {
 }
 
 @ObjectType()
-@Entity('idempotency_keys')
+@Entity('IdempotencyKey')
 @Index(['key'], { unique: true })
 @Index(['operation'])
 export class IdempotencyKey {

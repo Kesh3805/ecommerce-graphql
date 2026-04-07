@@ -4,7 +4,7 @@ import { Product } from '../../catalog/entities';
 import { Variant } from '../../variant/entities';
 
 @ObjectType()
-@Entity('product_media')
+@Entity('ProductMedia')
 @Index(['product_id', 'position'])
 export class ProductMedia {
   @Field(() => Int)
@@ -45,7 +45,7 @@ export class ProductMedia {
 }
 
 @ObjectType()
-@Entity('variant_media')
+@Entity('VariantMedia')
 @Index(['variant_id', 'media_id'], { unique: true })
 export class VariantMedia {
   @Field(() => Int)

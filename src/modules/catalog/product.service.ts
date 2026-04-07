@@ -1,8 +1,8 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, ILike, In, Repository } from 'typeorm';
+import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
 import { ProductStatus } from '../../common/enums/ecommerce.enums';
-import { CreateProductInput, UpdateProductInput, ProductFilterInput, PaginationInput, AddProductOptionInput } from './dto';
+import { CreateProductInput, UpdateProductInput, ProductFilterInput, PaginationInput, AddProductOptionInput, CreateStoreInput } from './dto';
 import { PaginatedProductsResponse } from './dto/product.response';
 import { Category, OptionValue, Product, ProductCategory, ProductOption, ProductSEO, Store } from './entities';
 
@@ -22,43 +22,80 @@ export class ProductService {
     @InjectRepository(Store) private readonly storeRepo: Repository<Store>,
   ) {}
 
+  async findStores(): Promise<Store[]> {
+    return this.storeRepo.find({
+      order: { created_at: 'DESC' },
+    });
+  }
+
+  async findStore(storeId: number): Promise<Store> {
+    const store = await this.storeRepo.findOne({ where: { store_id: storeId } });
+    if (!store) {
+      throw new NotFoundException(`Store with ID ${storeId} not found`);
+    }
+
+    return store;
+  }
+
+  async findCategories(storeId?: number): Promise<Category[]> {
+    return this.categoryRepo.find({
+      order: { name: 'ASC' },
+    });
+  }
+
+  async createStore(input: CreateStoreInput): Promise<Store> {
+    const store = await this.storeRepo.save(
+      this.storeRepo.create({
+        name: input.name,
+        owner_user_id: input.owner_user_id,
+      }),
+    );
+
+    return this.findStore(store.store_id);
+  }
+
   async findAll(filter: ProductFilterInput = {}, pagination: PaginationInput = {}): Promise<PaginatedProductsResponse> {
     const page = pagination.page ?? 1;
     const limit = pagination.limit ?? DEFAULT_PAGE_SIZE;
     const skip = (page - 1) * limit;
 
-    const where: Record<string, unknown> = {};
-    if (filter.store_id) where.store_id = filter.store_id;
-    if (filter.status) where.status = filter.status;
+    const queryBuilder = this.productRepo
+      .createQueryBuilder('product')
+      .leftJoinAndSelect('product.seo', 'seo')
+      .leftJoinAndSelect('product.options', 'options')
+      .leftJoinAndSelect('options.values', 'optionValues')
+      .leftJoinAndSelect('product.category_links', 'categoryLinks')
+      .leftJoinAndSelect('categoryLinks.category', 'category')
+      .orderBy('product.created_at', 'DESC')
+      .skip(skip)
+      .take(limit)
+      .distinct(true);
 
-    const [items, total] = await this.productRepo.findAndCount({
-      where: {
-        ...where,
-        ...(filter.search
-          ? [
-              { ...where, title: ILike(`%${filter.search}%`) },
-              { ...where, description: ILike(`%${filter.search}%`) },
-              { ...where, brand: ILike(`%${filter.search}%`) },
-            ]
-          : where),
-      },
-      relations: {
-        seo: true,
-        options: { values: true },
-        category_links: { category: true },
-      },
-      order: {
-        created_at: 'DESC',
-      },
-      skip,
-      take: limit,
-    });
+    if (filter.store_id) {
+      queryBuilder.andWhere('product.store_id = :storeId', { storeId: filter.store_id });
+    }
 
-    const filtered = filter.category_id
-      ? items.filter((item) => (item.category_links ?? []).some((link) => link.category_id === filter.category_id))
-      : items;
+    if (filter.status) {
+      queryBuilder.andWhere('product.status = :status', { status: filter.status });
+    }
 
-    const mapped = filtered.map((item) => ({
+    if (filter.category_id) {
+      queryBuilder.andWhere('categoryLinks.category_id = :categoryId', { categoryId: filter.category_id });
+    }
+
+    if (filter.search) {
+      queryBuilder.andWhere(
+        new Brackets((qb) => {
+          qb.where('product.title ILIKE :search', { search: `%${filter.search}%` })
+            .orWhere('product.description ILIKE :search', { search: `%${filter.search}%` })
+            .orWhere('product.brand ILIKE :search', { search: `%${filter.search}%` });
+        }),
+      );
+    }
+
+    const [items, total] = await queryBuilder.getManyAndCount();
+
+    const mapped = items.map((item) => ({
       ...item,
       categories: (item.category_links ?? []).map((link) => link.category),
       options: (item.options ?? []).map((option) => ({
@@ -122,8 +159,59 @@ export class ProductService {
     return this.findAll({ category_id: categoryId }, pagination);
   }
 
+  private async syncTableIdSequence(manager: EntityManager, table: string, column: string): Promise<void> {
+    const maxRes = await manager.query(
+      `SELECT COALESCE(MAX("${column}"), 0)::int AS max_id FROM public."${table}"`,
+    );
+    const nextValue = Number(maxRes[0]?.max_id ?? 0) + 1;
+
+    const serialRes = await manager.query(
+      `SELECT pg_get_serial_sequence('public."${table}"', '${column}') AS seq`,
+    );
+    const serialSeq = serialRes[0]?.seq as string | null;
+
+    const defaultRes = await manager.query(
+      `
+        SELECT column_default
+        FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=$1 AND column_name=$2
+      `,
+      [table, column],
+    );
+
+    const defaultText = (defaultRes[0]?.column_default ?? '') as string;
+    const defaultMatch = defaultText.match(/nextval\('(.+?)'::regclass\)/i);
+    const defaultSeqRaw = defaultMatch?.[1] ?? null;
+
+    const candidateSeqs = new Set<string>();
+    if (serialSeq) {
+      candidateSeqs.add(serialSeq);
+    }
+
+    if (defaultSeqRaw) {
+      candidateSeqs.add(defaultSeqRaw);
+      candidateSeqs.add(defaultSeqRaw.replace(/"/g, ''));
+
+      if (!defaultSeqRaw.includes('.')) {
+        candidateSeqs.add(`public.${defaultSeqRaw}`);
+        const withoutQuotes = defaultSeqRaw.replace(/"/g, '');
+        candidateSeqs.add(`public.${withoutQuotes}`);
+      }
+    }
+
+    for (const seqName of candidateSeqs) {
+      const existsRes = await manager.query('SELECT to_regclass($1) AS reg', [seqName]);
+      if (!existsRes[0]?.reg) {
+        continue;
+      }
+
+      await manager.query('SELECT setval($1, $2, false)', [seqName, nextValue]);
+    }
+  }
+
   async create(input: CreateProductInput): Promise<Product> {
-    const { category_ids, seo, ...productData } = input;
+    const normalizedInput = this.normalizeCreateInput(input);
+    const { category_ids, seo, ...productData } = normalizedInput;
 
     const store = await this.storeRepo.findOne({ where: { store_id: productData.store_id } });
     if (!store) {
@@ -142,7 +230,10 @@ export class ProductService {
 
       const product = manager.create(Product, {
         ...productData,
-        status: ProductStatus.DRAFT,
+        status: productData.status ?? ProductStatus.DRAFT,
+        published_at:
+          productData.published_at ??
+          ((productData.status ?? ProductStatus.DRAFT) === ProductStatus.ACTIVE ? new Date() : undefined),
       });
       const savedProduct = await manager.save(Product, product);
 
@@ -150,7 +241,7 @@ export class ProductService {
         await manager.save(
           ProductSEO,
           manager.create(ProductSEO, {
-            ...seo,
+            ...this.normalizeSeoInput(seo),
             product_id: savedProduct.product_id,
           }),
         );
@@ -161,6 +252,8 @@ export class ProductService {
         if (categories.length !== category_ids.length) {
           throw new NotFoundException('One or more categories not found');
         }
+
+        await this.syncTableIdSequence(manager, 'ProductCategory', 'id');
 
         await manager.save(
           ProductCategory,
@@ -173,12 +266,34 @@ export class ProductService {
         );
       }
 
-      return this.findOne(savedProduct.product_id);
+      const hydratedProduct = await manager.findOneOrFail(Product, {
+        where: { product_id: savedProduct.product_id },
+        relations: {
+          seo: true,
+          options: { values: true },
+          category_links: { category: true },
+          variants: {
+            inventory_item: {
+              levels: true,
+            },
+          },
+        },
+      });
+
+      return {
+        ...hydratedProduct,
+        categories: (hydratedProduct.category_links ?? []).map((link) => link.category),
+        options: (hydratedProduct.options ?? []).map((option) => ({
+          ...option,
+          values: [...(option.values ?? [])].sort((a, b) => a.position - b.position),
+        })),
+      };
     });
   }
 
   async update(input: UpdateProductInput): Promise<Product> {
-    const { product_id, category_ids, seo, ...productData } = input;
+    const normalizedInput = this.normalizeUpdateInput(input);
+    const { product_id, category_ids, seo, ...productData } = normalizedInput;
 
     await this.findOne(product_id);
 
@@ -206,6 +321,8 @@ export class ProductService {
             throw new NotFoundException('One or more categories not found');
           }
 
+          await this.syncTableIdSequence(manager, 'ProductCategory', 'id');
+
           await manager.save(
             ProductCategory,
             category_ids.map((category_id) =>
@@ -221,19 +338,40 @@ export class ProductService {
       if (seo) {
         const existingSeo = await manager.findOne(ProductSEO, { where: { product_id } });
         if (existingSeo) {
-          await manager.update(ProductSEO, { product_id }, seo);
+          await manager.update(ProductSEO, { product_id }, this.normalizeSeoInput(seo));
         } else {
           await manager.save(
             ProductSEO,
             manager.create(ProductSEO, {
               product_id,
-              ...seo,
+              ...this.normalizeSeoInput(seo),
             }),
           );
         }
       }
 
-      return this.findOne(product_id);
+      const product = await manager.findOneOrFail(Product, {
+        where: { product_id },
+        relations: {
+          seo: true,
+          options: { values: true },
+          category_links: { category: true },
+          variants: {
+            inventory_item: {
+              levels: true,
+            },
+          },
+        },
+      });
+
+      return {
+        ...product,
+        categories: (product.category_links ?? []).map((link) => link.category),
+        options: (product.options ?? []).map((option) => ({
+          ...option,
+          values: [...(option.values ?? [])].sort((a, b) => a.position - b.position),
+        })),
+      };
     });
   }
 
@@ -262,6 +400,8 @@ export class ProductService {
         .then((row) => Number(row.max) + 1));
 
     return this.dataSource.transaction(async (manager) => {
+      await this.syncTableIdSequence(manager, 'ProductOption', 'option_id');
+
       const option = await manager.save(
         ProductOption,
         manager.create(ProductOption, {
@@ -270,6 +410,8 @@ export class ProductService {
           position: optionPosition,
         }),
       );
+
+      await this.syncTableIdSequence(manager, 'OptionValue', 'value_id');
 
       const optionValues = values.map((value, idx) =>
         manager.create(OptionValue, {
@@ -327,5 +469,42 @@ export class ProductService {
     );
 
     return this.findOne(productId);
+  }
+
+  private normalizeSeoInput(seo: CreateProductInput['seo'] | UpdateProductInput['seo']):
+    | CreateProductInput['seo']
+    | UpdateProductInput['seo'] {
+    if (!seo) {
+      return seo;
+    }
+
+    return {
+      ...seo,
+      meta_title: seo.meta_title ?? seo.metaTitle,
+      meta_description: seo.meta_description ?? seo.metaDescription,
+      og_title: seo.og_title ?? seo.ogTitle,
+      og_description: seo.og_description ?? seo.ogDescription,
+      og_image: seo.og_image ?? seo.ogImage,
+    };
+  }
+
+  private normalizeCreateInput(input: CreateProductInput): CreateProductInput {
+    return {
+      ...input,
+      store_id: input.store_id ?? input.storeId,
+      category_ids: input.category_ids ?? input.categoryIds,
+      published_at: input.published_at ?? input.publishedAt,
+      seo: this.normalizeSeoInput(input.seo),
+    };
+  }
+
+  private normalizeUpdateInput(input: UpdateProductInput): UpdateProductInput {
+    return {
+      ...input,
+      product_id: input.product_id ?? input.productId,
+      category_ids: input.category_ids ?? input.categoryIds,
+      published_at: input.published_at ?? input.publishedAt,
+      seo: this.normalizeSeoInput(input.seo),
+    };
   }
 }

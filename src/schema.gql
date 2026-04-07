@@ -136,9 +136,14 @@ input CreateOrderInput {
 """Input for creating a new product"""
 input CreateProductInput {
   brand: String
+  categoryIds: [Int!]
   category_ids: [Int!]
   description: String
+  publishedAt: DateTime
+  published_at: DateTime
   seo: CreateProductSEOInput
+  status: ProductStatus
+  storeId: Int
   store_id: Int!
   title: String!
 }
@@ -146,11 +151,22 @@ input CreateProductInput {
 """SEO input for product"""
 input CreateProductSEOInput {
   handle: String!
+  metaDescription: String
+  metaTitle: String
   meta_description: String
   meta_title: String
+  ogDescription: String
+  ogImage: String
+  ogTitle: String
   og_description: String
   og_image: String
   og_title: String
+}
+
+"""Input for creating a store"""
+input CreateStoreInput {
+  name: String!
+  owner_user_id: String!
 }
 
 input CreateUserInput {
@@ -298,6 +314,9 @@ type Mutation {
 
   """Create a new product"""
   createProduct(input: CreateProductInput!): Product!
+
+  """Create a new store"""
+  createStore(input: CreateStoreInput!): Store!
 
   """Create a new user"""
   createUser(input: CreateUserInput!): User!
@@ -515,6 +534,9 @@ enum ProductStatus {
 type Query {
   cart(id: Int!): Cart!
 
+  """Get categories, optionally filtered by store"""
+  categories(storeId: Int): [Category!]!
+
   """Get products by category"""
   categoryProducts(categoryId: Int!, pagination: PaginationInput): PaginatedProductsResponse!
 
@@ -551,6 +573,12 @@ type Query {
   products(filter: ProductFilterInput, pagination: PaginationInput): PaginatedProductsResponse!
   searchProducts(input: ProductSearchInput!): [Product!]!
 
+  """Get a single store by ID"""
+  store(id: Int!): Store!
+
+  """Get all stores"""
+  stores: [Store!]!
+
   """Get a single user by ID (requires auth)"""
   user(id: Int!): User!
 
@@ -580,6 +608,14 @@ input SetInventoryLevelInput {
   inventory_item_id: Int!
   location_id: Int!
   notes: String
+}
+
+type Store {
+  created_at: DateTime!
+  name: String!
+  owner_user_id: String!
+  store_id: Int!
+  updated_at: DateTime!
 }
 
 """Input for transferring inventory between locations"""
@@ -616,9 +652,13 @@ input UpdateLocationInput {
 """Input for updating a product"""
 input UpdateProductInput {
   brand: String
+  categoryIds: [Int!]
   category_ids: [Int!]
   description: String
+  productId: Int
   product_id: Int!
+  publishedAt: DateTime
+  published_at: DateTime
   seo: CreateProductSEOInput
   status: ProductStatus
   title: String

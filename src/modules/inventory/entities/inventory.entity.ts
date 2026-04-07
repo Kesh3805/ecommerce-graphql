@@ -17,7 +17,7 @@ import { Store } from '../../catalog/entities/product.entity';
 import { Variant } from '../../variant/entities/variant.entity';
 
 @ObjectType({ description: 'Location entity for multi-location inventory' })
-@Entity('inventory_locations')
+@Entity('InventoryLocation')
 @Index(['store_id', 'name'], { unique: true })
 export class Location {
   @Field(() => Int)
@@ -65,7 +65,7 @@ export class Location {
 }
 
 @ObjectType({ description: 'Inventory item with levels across locations' })
-@Entity('inventory_items')
+@Entity('InventoryItem')
 @Index(['sku'], { unique: true, where: 'sku IS NOT NULL' })
 export class InventoryItem {
   @Field(() => Int)
@@ -103,7 +103,7 @@ export class InventoryItem {
 }
 
 @ObjectType({ description: 'Inventory level at a specific location' })
-@Entity('inventory_levels')
+@Entity('InventoryLevel')
 @Index(['inventory_item_id', 'location_id'], { unique: true })
 export class InventoryLevelEntity {
   @Field(() => Int)
@@ -148,7 +148,7 @@ export class InventoryLevelEntity {
 }
 
 @ObjectType({ description: 'Inventory adjustment log entry' })
-@Entity('inventory_adjustments')
+@Entity('InventoryAdjustment')
 @Index(['inventory_level_id', 'created_at'])
 export class InventoryAdjustment {
   @Field(() => Int)
@@ -181,7 +181,7 @@ export class InventoryAdjustment {
 }
 
 @ObjectType({ description: 'Inventory reservation for cart/checkout flow' })
-@Entity('inventory_reservations')
+@Entity('InventoryReservation')
 @Index(['inventory_item_id', 'cart_id'])
 @Index(['expires_at'])
 export class InventoryReservation {

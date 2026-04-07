@@ -1,6 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { InventoryPolicy } from '../../common/enums/ecommerce.enums';
 import { Product, ProductOption } from '../catalog/entities';
 import { InventoryItem } from '../inventory/entities/inventory.entity';
@@ -81,6 +81,7 @@ export class VariantService {
       let inventoryItemId: number | undefined;
 
       if (create_inventory) {
+        await this.syncTableIdSequence(manager, 'InventoryItem', 'inventory_item_id');
         const item = await manager.save(
           InventoryItem,
           manager.create(InventoryItem, {
@@ -90,6 +91,8 @@ export class VariantService {
         );
         inventoryItemId = item.inventory_item_id;
       }
+
+      await this.syncTableIdSequence(manager, 'Variant', 'variant_id');
 
       const variant = await manager.save(
         Variant,
@@ -102,7 +105,12 @@ export class VariantService {
         }),
       );
 
-      return this.findOne(variant.variant_id);
+      const hydratedVariant = await manager.findOneOrFail(Variant, {
+        where: { variant_id: variant.variant_id },
+        relations: { inventory_item: { levels: true }, product: true },
+      });
+
+      return this.mapVariantWithTitle(hydratedVariant);
     });
   }
 
@@ -134,7 +142,12 @@ export class VariantService {
       }
 
       await manager.update(Variant, { variant_id }, updateData);
-      return this.findOne(variant_id);
+      const hydratedVariant = await manager.findOneOrFail(Variant, {
+        where: { variant_id },
+        relations: { inventory_item: { levels: true }, product: true },
+      });
+
+      return this.mapVariantWithTitle(hydratedVariant);
     });
   }
 
@@ -185,6 +198,12 @@ export class VariantService {
 
     return this.dataSource.transaction(async (manager) => {
       const createdVariantIds: number[] = [];
+
+      await this.syncTableIdSequence(manager, 'Variant', 'variant_id');
+
+      if (create_inventory) {
+        await this.syncTableIdSequence(manager, 'InventoryItem', 'inventory_item_id');
+      }
 
       for (let index = 0; index < dedupedCombinations.length; index += 1) {
         const combo = dedupedCombinations[index];
@@ -259,6 +278,56 @@ export class VariantService {
     const valueArrays = options.map((option) => option.values.map((value) => value.value));
 
     return valueArrays.reduce<string[][]>((acc, values) => acc.flatMap((combo) => values.map((value) => [...combo, value])), [[]]);
+  }
+
+  private async syncTableIdSequence(manager: EntityManager, table: string, column: string): Promise<void> {
+    const maxRes = await manager.query(
+      `SELECT COALESCE(MAX("${column}"), 0)::int AS max_id FROM public."${table}"`,
+    );
+    const nextValue = Number(maxRes[0]?.max_id ?? 0) + 1;
+
+    const serialRes = await manager.query(
+      `SELECT pg_get_serial_sequence('public."${table}"', '${column}') AS seq`,
+    );
+    const serialSeq = serialRes[0]?.seq as string | null;
+
+    const defaultRes = await manager.query(
+      `
+        SELECT column_default
+        FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=$1 AND column_name=$2
+      `,
+      [table, column],
+    );
+
+    const defaultText = (defaultRes[0]?.column_default ?? '') as string;
+    const defaultMatch = defaultText.match(/nextval\('(.+?)'::regclass\)/i);
+    const defaultSeqRaw = defaultMatch?.[1] ?? null;
+
+    const candidateSeqs = new Set<string>();
+    if (serialSeq) {
+      candidateSeqs.add(serialSeq);
+    }
+
+    if (defaultSeqRaw) {
+      candidateSeqs.add(defaultSeqRaw);
+      candidateSeqs.add(defaultSeqRaw.replace(/"/g, ''));
+
+      if (!defaultSeqRaw.includes('.')) {
+        candidateSeqs.add(`public.${defaultSeqRaw}`);
+        const withoutQuotes = defaultSeqRaw.replace(/"/g, '');
+        candidateSeqs.add(`public.${withoutQuotes}`);
+      }
+    }
+
+    for (const seqName of candidateSeqs) {
+      const existsRes = await manager.query('SELECT to_regclass($1) AS reg', [seqName]);
+      if (!existsRes[0]?.reg) {
+        continue;
+      }
+
+      await manager.query('SELECT setval($1, $2, false)', [seqName, nextValue]);
+    }
   }
 
   private mapVariantWithTitle(variant: Variant): Variant {

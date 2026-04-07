@@ -9,9 +9,10 @@ import { InventoryService } from './inventory.service';
 import { InventoryResolver } from './inventory.resolver';
 import { InventoryAdjustment, InventoryItemEntity, InventoryLevelEntity, InventoryReservation, Location } from './entities';
 import { Variant } from '../variant/entities';
+import { Store } from '../catalog/entities';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Location, InventoryItemEntity, InventoryLevelEntity, InventoryAdjustment, InventoryReservation, Variant])],
+  imports: [TypeOrmModule.forFeature([Location, InventoryItemEntity, InventoryLevelEntity, InventoryAdjustment, InventoryReservation, Variant, Store])],
   providers: [InventoryService, InventoryResolver],
   exports: [InventoryService],
 })

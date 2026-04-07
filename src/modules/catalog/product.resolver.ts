@@ -5,13 +5,33 @@
 
 import { Resolver, Query, Mutation, Args, Int } from '@nestjs/graphql';
 import { ProductService } from './product.service';
-import { Product, ProductOption } from './entities';
-import { CreateProductInput, UpdateProductInput, ProductFilterInput, PaginationInput, AddProductOptionInput } from './dto';
+import { Category, Product, ProductOption, Store } from './entities';
+import { CreateProductInput, UpdateProductInput, ProductFilterInput, PaginationInput, AddProductOptionInput, CreateStoreInput } from './dto';
 import { PaginatedProductsResponse } from './dto/product.response';
 
 @Resolver(() => Product)
 export class ProductResolver {
   constructor(private readonly productService: ProductService) {}
+
+  @Query(() => [Store], { description: 'Get all stores' })
+  async stores(): Promise<Store[]> {
+    return this.productService.findStores();
+  }
+
+  @Query(() => Store, { description: 'Get a single store by ID' })
+  async store(@Args('id', { type: () => Int }) id: number): Promise<Store> {
+    return this.productService.findStore(id);
+  }
+
+  @Query(() => [Category], { description: 'Get categories, optionally filtered by store' })
+  async categories(@Args('storeId', { type: () => Int, nullable: true }) storeId?: number): Promise<Category[]> {
+    return this.productService.findCategories(storeId);
+  }
+
+  @Mutation(() => Store, { description: 'Create a new store' })
+  async createStore(@Args('input') input: CreateStoreInput): Promise<Store> {
+    return this.productService.createStore(input);
+  }
 
   @Query(() => PaginatedProductsResponse, { description: 'Get paginated list of products' })
   async products(
