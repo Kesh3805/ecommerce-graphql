@@ -1,17 +1,5 @@
 import { Field, Float, Int, ObjectType } from '@nestjs/graphql';
-import {
-  Column,
-  CreateDateColumn,
-  Entity,
-  Index,
-  JoinColumn,
-  ManyToOne,
-  OneToMany,
-  OneToOne,
-  PrimaryGeneratedColumn,
-  Relation,
-  UpdateDateColumn,
-} from 'typeorm';
+import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, OneToOne, PrimaryGeneratedColumn, Relation, UpdateDateColumn } from 'typeorm';
 import { InventoryPolicy } from '../../../common/enums/ecommerce.enums';
 import { Product } from '../../catalog/entities/product.entity';
 import { InventoryItem } from '../../inventory/entities/inventory.entity';
@@ -62,6 +50,10 @@ export class Variant {
   @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true })
   compare_at_price?: number;
 
+  @Field(() => [String], { nullable: true })
+  @Column({ type: 'text', array: true, nullable: true })
+  media_urls?: string[];
+
   @Field(() => Float, { nullable: true })
   @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true })
   cost_price?: number;
@@ -101,27 +93,4 @@ export class Variant {
 
   @Field(() => String, { description: 'Combined option values as display title', nullable: true })
   title?: string;
-
-  @OneToMany(() => VariantOptionSelection, (selection) => selection.variant, { cascade: true })
-  selections?: Relation<VariantOptionSelection[]>;
-}
-
-@Entity('VariantOptionSelection')
-@Index(['variant_id', 'option_id'], { unique: true })
-export class VariantOptionSelection {
-  @PrimaryGeneratedColumn({ name: 'selection_id' })
-  selection_id: number;
-
-  @Column({ type: 'int' })
-  variant_id: number;
-
-  @Column({ type: 'int' })
-  option_id: number;
-
-  @Column({ type: 'varchar', length: 120 })
-  value: string;
-
-  @ManyToOne(() => Variant, (variant) => variant.selections, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'variant_id' })
-  variant: Relation<Variant>;
 }

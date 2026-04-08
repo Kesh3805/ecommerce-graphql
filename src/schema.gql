@@ -10,6 +10,11 @@ input AddProductOptionInput {
   values: [String!]!
 }
 
+input AddProductsToCollectionInput {
+  collection_id: Int!
+  product_ids: [Int!]!
+}
+
 input AddToCartInput {
   cart_id: Int!
   quantity: Int!
@@ -60,6 +65,77 @@ type AuthPayload {
   tokenType: String!
 }
 
+"""Brand record"""
+type BrandRecordResponse {
+  brand_id: Int!
+  created_at: DateTime!
+  name: String!
+  slug: String
+  store_id: Int!
+  store_name: String
+  updated_at: DateTime!
+}
+
+"""CSV-style row for bulk product import"""
+input BulkImportProductRowInput {
+  brand: String
+  category_slugs: String
+  country_codes: String
+  description: String
+  handle: String
+  media_url: String
+  media_urls: String
+  option1_name: String
+  option1_values: String
+  option2_name: String
+  option2_values: String
+  option3_name: String
+  option3_values: String
+
+  """For variant rows, parent product handle/slug."""
+  parent_handle: String
+  row_number: Float
+  title: String
+  variant_barcode: String
+  variant_compare_at_price: String
+  variant_cost_price: String
+  variant_inventory: String
+  variant_inventory_policy: String
+  variant_media_url: String
+  variant_media_urls: String
+  variant_option1_value: String
+  variant_option2_value: String
+  variant_option3_value: String
+  variant_price: String
+  variant_sku: String
+  variant_weight: String
+  variant_weight_unit: String
+}
+
+"""Per-row bulk import result"""
+type BulkImportProductRowResult {
+  handle: String
+  message: String!
+  product_id: Int
+  row_number: Int!
+  success: Boolean!
+}
+
+"""Bulk import request payload"""
+input BulkImportProductsInput {
+  continue_on_error: Boolean = true
+  rows: [BulkImportProductRowInput!]!
+  store_id: Int!
+}
+
+"""Bulk import summary and row results"""
+type BulkImportProductsResponse {
+  failure_count: Int!
+  results: [BulkImportProductRowResult!]!
+  success_count: Int!
+  total_rows: Int!
+}
+
 """Response for bulk variant update"""
 type BulkUpdateResponse {
   updated: Int!
@@ -71,6 +147,18 @@ input BulkUpdateVariantPricesInput {
   compare_at_price: Float
   price: Float!
   variant_ids: [Int!]!
+}
+
+type CarouselProduct {
+  compare_at_price: Float
+  handle: String
+  in_stock: Boolean!
+  price: Float
+  product_id: Int!
+  rating: Float
+  review_count: Float
+  thumbnail_url: String
+  title: String!
 }
 
 type Cart {
@@ -113,8 +201,99 @@ type Category {
   slug: String!
 }
 
+"""Metafield definition for a category"""
+input CategoryMetafieldDefinitionInput {
+  key: String!
+  label: String
+  type: String = "text"
+}
+
+"""Collection for merchandising product groups"""
+type Collection {
+  collection_id: Int!
+  collection_type: CollectionType!
+  created_at: DateTime!
+  description: String
+  image_url: String
+  is_visible: Boolean!
+  meta_description: String
+  meta_title: String
+  name: String!
+  position: Int!
+  product_count: Int
+  products(countryCode: String, limit: Int = 50, offset: Int = 0): [Product!]
+  published_at: DateTime
+
+  """Collection rules"""
+  rules: [CollectionRule!]
+  slug: String!
+  store_id: Int!
+  unpublished_at: DateTime
+  updated_at: DateTime!
+}
+
+input CollectionFilterInput {
+  collection_type: CollectionType
+  is_visible: Boolean
+  store_id: Int
+}
+
+"""Rule for automated collection"""
+type CollectionRule {
+  collection_id: Int!
+  created_at: DateTime!
+  field: String!
+  operator: RuleOperator!
+  rule_group: Int!
+  rule_id: Int!
+  value: String!
+  value_type: RuleValueType!
+}
+
+input CollectionRuleInput {
+  field: String!
+  operator: RuleOperator!
+  rule_group: Int!
+  value: String!
+  value_type: RuleValueType
+}
+
+enum CollectionType {
+  AUTOMATED
+  MANUAL
+}
+
+"""Input for creating a brand"""
+input CreateBrandInput {
+  name: String!
+  store_id: Int!
+}
+
 input CreateCartInput {
   customer_id: String
+  store_id: Int!
+}
+
+"""Input for creating a category"""
+input CreateCategoryInput {
+  metafields: [CategoryMetafieldDefinitionInput!]
+  name: String!
+  parent_id: Int
+  slug: String
+  storeId: Int
+  store_id: Int
+}
+
+input CreateCollectionInput {
+  collection_type: CollectionType!
+  description: String
+  image_url: String
+  meta_description: String
+  meta_title: String
+  name: String!
+  product_ids: [Int!]
+  rules: [CollectionRuleInput!]
+  slug: String
   store_id: Int!
 }
 
@@ -138,7 +317,14 @@ input CreateProductInput {
   brand: String
   categoryIds: [Int!]
   category_ids: [Int!]
+  countryCodes: [String!]
+  country_codes: [String!]
   description: String
+  mediaUrls: [String!]
+  media_urls: [String!]
+  metafields: [ProductMetafieldInput!]
+  primaryImageUrl: String
+  primary_image_url: String
   publishedAt: DateTime
   published_at: DateTime
   seo: CreateProductSEOInput
@@ -185,6 +371,7 @@ input CreateVariantInput {
   """Create inventory item for this variant"""
   create_inventory: Boolean
   inventory_policy: InventoryPolicy
+  media_urls: [String!]
   option1_value: String
   option2_value: String
   option3_value: String
@@ -295,6 +482,9 @@ input LoginInput {
 type Mutation {
   """Add an option to a product"""
   addProductOption(input: AddProductOptionInput!): ProductOption!
+
+  """Add products to a manual collection"""
+  addProductsToCollection(input: AddProductsToCollectionInput!): Collection!
   addToCart(input: AddToCartInput!): Cart!
 
   """Adjust inventory quantity"""
@@ -304,9 +494,21 @@ type Mutation {
   archiveProduct(id: Int!): Product!
   attachProductMedia(input: AttachProductMediaInput!): ProductMedia!
 
+  """Bulk import products using CSV-style rows"""
+  bulkImportProducts(input: BulkImportProductsInput!): BulkImportProductsResponse!
+
   """Bulk update variant prices"""
   bulkUpdateVariantPrices(input: BulkUpdateVariantPricesInput!): BulkUpdateResponse!
+
+  """Create a brand for a store"""
+  createBrand(input: CreateBrandInput!): BrandRecordResponse!
   createCart(input: CreateCartInput!): Cart!
+
+  """Create a category"""
+  createCategory(input: CreateCategoryInput!): Category!
+
+  """Create a new collection"""
+  createCollection(input: CreateCollectionInput!): Collection!
 
   """Create a new location"""
   createLocation(input: CreateLocationInput!): Location!
@@ -324,11 +526,21 @@ type Mutation {
   """Create a single variant manually"""
   createVariant(input: CreateVariantInput!): Variant!
 
+  """Delete a brand"""
+  deleteBrand(brandId: Int!): Boolean!
+
+  """Delete a category"""
+  deleteCategory(id: Int!): Boolean!
+
+  """Delete a collection"""
+  deleteCollection(collectionId: Int!): Boolean!
+
   """Delete a location"""
   deleteLocation(id: Int!): Boolean!
 
   """Delete a product by ID"""
   deleteProduct(id: Int!): Boolean!
+  deleteProductMedia(mediaId: Int!): Boolean!
 
   """Delete a variant"""
   deleteVariant(id: Int!): Boolean!
@@ -341,16 +553,28 @@ type Mutation {
 
   """Publish a product (set status to ACTIVE)"""
   publishProduct(id: Int!): Product!
+
+  """Record a product event (view, add_to_cart, purchase)"""
+  recordProductEvent(count: Int = 1, eventType: String!, productId: Int!): Boolean!
   removeFromCart(cartItemId: Int!): Cart!
 
   """Remove an option from a product"""
   removeProductOption(optionId: Int!): Boolean!
 
+  """Remove products from a collection"""
+  removeProductsFromCollection(collectionId: Int!, productIds: [Int!]!): Collection!
+
   """Delete a user by ID (requires auth)"""
   removeUser(id: Int!): Boolean!
 
+  """Reorder products in a collection"""
+  reorderCollectionProducts(collectionId: Int!, productIds: [Int!]!): Collection!
+
   """Reserve inventory for an order"""
   reserveInventory(input: ReserveInventoryInput!): InventoryLevelEntity!
+
+  """Set rules for an automated collection"""
+  setCollectionRules(collectionId: Int!, rules: [CollectionRuleInput!]!): Collection!
 
   """Set inventory (alias for setInventoryLevel)"""
   setInventory(input: SetInventoryLevelInput!): AdjustInventoryResponse!
@@ -358,12 +582,24 @@ type Mutation {
   """Set inventory level to specific quantity"""
   setInventoryLevel(input: SetInventoryLevelInput!): AdjustInventoryResponse!
 
+  """Set store-level available countries"""
+  setStoreCountries(input: SetStoreCountriesInput!): [String!]!
+
   """Transfer inventory between locations"""
   transferInventory(input: TransferInventoryInput!): TransferInventoryResponse!
 
   """Release reserved inventory"""
   unreserveInventory(input: ReserveInventoryInput!): InventoryLevelEntity!
+
+  """Update an existing brand"""
+  updateBrand(input: UpdateBrandInput!): BrandRecordResponse!
   updateCartItem(input: UpdateCartItemInput!): Cart!
+
+  """Update a category"""
+  updateCategory(id: Int!, input: UpdateCategoryInput!): Category!
+
+  """Update a collection"""
+  updateCollection(input: UpdateCollectionInput!): Collection!
 
   """Update a location"""
   updateLocation(input: UpdateLocationInput!): Location!
@@ -465,18 +701,43 @@ enum PaymentStatus {
 
 """Product entity"""
 type Product {
+  add_to_cart_count: Int!
+  add_to_cart_count_30d: Int!
+  best_selling_score: Float!
   brand: String
   categories: [Category!]
+  copurchased_product_ids: [Int!]
+  country_codes: [String!]
   created_at: DateTime!
   description: String
+  handle: String
+  last_computed_at: DateTime
+  media: [ProductMedia!]
+  media_urls: [String!]
+  meta_description: String
+  meta_title: String
+  metafields: [ProductMetafield!]
+  og_description: String
+  og_image: String
+  og_title: String
   options: [ProductOption!]
+  order_count: Int!
+  order_count_30d: Int!
+  primary_image_url: String
   product_id: Int!
   published_at: DateTime
+  related_product_ids: [Int!]
+  revenue_30d: Float!
   seo: ProductSEO
   status: ProductStatus!
   store_id: Int!
   title: String!
+  total_revenue: Float!
+  trending_score: Float!
   updated_at: DateTime!
+  variants: [Variant!]
+  view_count: Int!
+  view_count_30d: Int!
 }
 
 """Filter options for product queries"""
@@ -496,6 +757,21 @@ type ProductMedia {
   product_id: Int!
   type: String
   url: String!
+}
+
+"""Generic product metafield entry"""
+type ProductMetafield {
+  id: Int!
+  key: String!
+  owner_id: Int!
+  owner_type: String!
+  value: String
+}
+
+"""Input for a product metafield entry"""
+input ProductMetafieldInput {
+  key: String!
+  value: String
 }
 
 """Product option"""
@@ -531,7 +807,69 @@ enum ProductStatus {
   DRAFT
 }
 
+"""Public storefront product option"""
+type PublicStorefrontOption {
+  name: String!
+  values: [String!]!
+}
+
+"""Public storefront product summary"""
+type PublicStorefrontProduct {
+  brand: String
+
+  """Default/min compare-at price"""
+  compare_at_price: String
+  description: String
+
+  """SEO handle or fallback identifier"""
+  handle: String!
+
+  """Best available product image URL"""
+  image_url: String
+
+  """All available product media URLs ordered by position"""
+  media_urls: [String!]
+  options: [PublicStorefrontOption!]
+
+  """Default/min variant price"""
+  price: String
+  product_id: Int!
+  store_id: Int!
+  store_name: String!
+  title: String!
+  variants: [PublicStorefrontVariant!]
+}
+
+"""Public storefront store with product list"""
+type PublicStorefrontStore {
+  name: String!
+  products: [PublicStorefrontProduct!]!
+  store_id: Int!
+}
+
+"""Public storefront product variant"""
+type PublicStorefrontVariant {
+  compare_at_price: String
+  inventory_available: Float
+  media_urls: [String!]
+  option1_value: String
+  option2_value: String
+  option3_value: String
+  price: String
+  sku: String
+  title: String
+  variant_id: Int!
+}
+
 type Query {
+  """Get available storefront countries for a store"""
+  availableCountries(storeId: Int!): [String!]!
+
+  """Get best selling products carousel"""
+  bestSelling(limit: Int = 12, storeId: Int): [CarouselProduct!]!
+
+  """Get brands for accessible stores"""
+  brands(storeId: Int): [BrandRecordResponse!]!
   cart(id: Int!): Cart!
 
   """Get categories, optionally filtered by store"""
@@ -539,6 +877,21 @@ type Query {
 
   """Get products by category"""
   categoryProducts(categoryId: Int!, pagination: PaginationInput): PaginatedProductsResponse!
+
+  """Get collection by ID"""
+  collection(collectionId: Int!): Collection
+
+  """Get collection by slug"""
+  collectionBySlug(slug: String!, storeId: Int!): Collection
+
+  """Get collection carousel products"""
+  collectionCarousel(collectionId: Int!, limit: Int = 12): [CarouselProduct!]!
+
+  """Get all collections"""
+  collections(filter: CollectionFilterInput): [Collection!]!
+
+  """Get frequently bought together products"""
+  frequentlyBoughtTogether(limit: Int = 6, productId: Int!): [CarouselProduct!]!
 
   """Get adjustment history for an inventory level"""
   inventoryAdjustments(inventoryLevelId: Int!): [InventoryAdjustment!]!
@@ -560,6 +913,9 @@ type Query {
 
   """Get current user stores"""
   myStores: [Store!]!
+
+  """Get new arrivals carousel"""
+  newArrivals(limit: Int = 12, storeId: Int): [CarouselProduct!]!
   order(id: Int!): Order!
 
   """Get a single product by ID"""
@@ -574,6 +930,21 @@ type Query {
 
   """Get paginated list of products"""
   products(filter: ProductFilterInput, pagination: PaginationInput): PaginatedProductsResponse!
+
+  """Public storefront product by handle"""
+  publicProductByHandle(countryCode: String, handle: String!): PublicStorefrontProduct
+
+  """Public storefront product search powered by Elasticsearch"""
+  publicSearchProducts(countryCode: String, limit: Int = 24, query: String!, storeId: Int, storeSlug: String): [PublicStorefrontProduct!]!
+
+  """Public storefront store by slug with active products"""
+  publicStoreBySlug(countryCode: String, productLimit: Int = 12, slug: String!): PublicStorefrontStore
+
+  """Public storefront stores with active products"""
+  publicStores(countryCode: String, productLimit: Int = 8, storeLimit: Int = 6): [PublicStorefrontStore!]!
+
+  """Get related products for a product"""
+  relatedProducts(limit: Int = 12, productId: Int!): [CarouselProduct!]!
   searchProducts(input: ProductSearchInput!): [Product!]!
 
   """Get a single store by ID"""
@@ -581,6 +952,9 @@ type Query {
 
   """Get all stores"""
   stores: [Store!]!
+
+  """Get trending products carousel"""
+  trending(limit: Int = 12, storeId: Int): [CarouselProduct!]!
 
   """Get a single user by ID (requires auth)"""
   user(id: Int!): User!
@@ -605,6 +979,27 @@ input ReserveInventoryInput {
   quantity: Int!
 }
 
+enum RuleOperator {
+  CONTAINS
+  EQUALS
+  GREATER_THAN
+  GREATER_THAN_OR_EQUAL
+  IS_NOT_SET
+  IS_SET
+  LESS_THAN
+  LESS_THAN_OR_EQUAL
+  NOT_CONTAINS
+  NOT_EQUALS
+  STARTS_WITH
+}
+
+enum RuleValueType {
+  ARRAY
+  BOOLEAN
+  NUMBER
+  STRING
+}
+
 """Input for setting inventory level at a location"""
 input SetInventoryLevelInput {
   available_quantity: Int!
@@ -613,10 +1008,17 @@ input SetInventoryLevelInput {
   notes: String
 }
 
+"""Input for managing store-level available countries"""
+input SetStoreCountriesInput {
+  country_codes: [String!]!
+  store_id: Int!
+}
+
 type Store {
   created_at: DateTime!
   name: String!
   owner_user_id: String!
+  slug: String
   store_id: Int!
   updated_at: DateTime!
 }
@@ -637,9 +1039,36 @@ type TransferInventoryResponse {
   to_level: InventoryLevelEntity!
 }
 
+"""Input for updating a brand"""
+input UpdateBrandInput {
+  brand_id: Int!
+  name: String
+}
+
 input UpdateCartItemInput {
   cart_item_id: Int!
   quantity: Int!
+}
+
+"""Input for updating a category"""
+input UpdateCategoryInput {
+  metafields: [CategoryMetafieldDefinitionInput!]
+  name: String
+  parent_id: Int
+  slug: String
+}
+
+input UpdateCollectionInput {
+  collection_id: Int!
+  description: String
+  image_url: String
+  is_visible: Boolean
+  meta_description: String
+  meta_title: String
+  name: String
+  product_ids: [Int!]
+  rules: [CollectionRuleInput!]
+  slug: String
 }
 
 """Input for updating a location"""
@@ -657,7 +1086,14 @@ input UpdateProductInput {
   brand: String
   categoryIds: [Int!]
   category_ids: [Int!]
+  countryCodes: [String!]
+  country_codes: [String!]
   description: String
+  mediaUrls: [String!]
+  media_urls: [String!]
+  metafields: [ProductMetafieldInput!]
+  primaryImageUrl: String
+  primary_image_url: String
   productId: Int
   product_id: Int!
   publishedAt: DateTime
@@ -682,6 +1118,7 @@ input UpdateVariantInput {
   cost_price: Float
   inventory_policy: InventoryPolicy
   is_default: Boolean
+  media_urls: [String!]
   price: Float
   sku: String
   variant_id: Int!
@@ -715,6 +1152,7 @@ type Variant {
   inventory_item_id: Int
   inventory_policy: InventoryPolicy!
   is_default: Boolean!
+  media_urls: [String!]
   option1_value: String
   option2_value: String
   option3_value: String

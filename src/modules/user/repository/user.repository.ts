@@ -5,7 +5,7 @@
 
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ILike, Repository } from 'typeorm';
+import { FindOptionsWhere, ILike, Repository } from 'typeorm';
 import { User } from '../entities/user.entity';
 import { APP_CONSTANTS, USER_ERRORS } from '../../../common/constants/constant';
 import { PaginatedResponse } from '../../../common/interfaces/paginated-response.interface';
@@ -93,13 +93,12 @@ export class UserRepository {
     const limit = options.limit ?? DEFAULT_LIMIT;
     const skip = (page - 1) * limit;
 
-    const where: any = { status: APP_CONSTANTS.ACTIVE_STATUS };
-    if (options.search) {
-      where.OR = [
-        { name: ILike(`%${options.search}%`) },
-        { email: ILike(`%${options.search}%`) },
-      ];
-    }
+    const where: FindOptionsWhere<User> | FindOptionsWhere<User>[] = options.search
+      ? [
+          { status: APP_CONSTANTS.ACTIVE_STATUS, name: ILike(`%${options.search}%`) },
+          { status: APP_CONSTANTS.ACTIVE_STATUS, email: ILike(`%${options.search}%`) },
+        ]
+      : { status: APP_CONSTANTS.ACTIVE_STATUS };
 
     const [rows, total] = await this.userRepo.findAndCount({
       where,
@@ -122,4 +121,3 @@ export class UserRepository {
     };
   }
 }
-

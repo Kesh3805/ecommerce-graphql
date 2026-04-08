@@ -44,14 +44,10 @@ export class InventoryService {
       throw new Error(`Invalid table/column combination: ${table}/${column}`);
     }
 
-    const maxRes = await manager.query(
-      `SELECT COALESCE(MAX("${column}"), 0)::int AS max_id FROM public."${table}"`,
-    );
+    const maxRes = await manager.query(`SELECT COALESCE(MAX("${column}"), 0)::int AS max_id FROM public."${table}"`);
     const nextValue = Number(maxRes[0]?.max_id ?? 0) + 1;
 
-    const serialRes = await manager.query(
-      `SELECT pg_get_serial_sequence('public."${table}"', '${column}') AS seq`,
-    );
+    const serialRes = await manager.query(`SELECT pg_get_serial_sequence('public."${table}"', '${column}') AS seq`);
     const serialSeq = serialRes[0]?.seq as string | null;
 
     const defaultRes = await manager.query(
@@ -144,10 +140,7 @@ export class InventoryService {
   /**
    * Create reservation with an existing transaction manager (for atomic operations)
    */
-  async createReservationWithManager(
-    manager: EntityManager,
-    input: CreateReservationInput,
-  ): Promise<InventoryReservation> {
+  async createReservationWithManager(manager: EntityManager, input: CreateReservationInput): Promise<InventoryReservation> {
     const { inventory_item_id, cart_id, quantity, expires_at } = input;
 
     const level = await manager
@@ -251,12 +244,7 @@ export class InventoryService {
   /**
    * Release reservations with an existing transaction manager (for atomic operations)
    */
-  async releaseReservationsByCartItemWithManager(
-    manager: EntityManager,
-    cart_id: number,
-    variant_id: number,
-    quantity: number,
-  ): Promise<void> {
+  async releaseReservationsByCartItemWithManager(manager: EntityManager, cart_id: number, variant_id: number, quantity: number): Promise<void> {
     const variant = await manager.findOne(Variant, { where: { variant_id } });
     if (!variant?.inventory_item_id) {
       return;
@@ -369,10 +357,7 @@ export class InventoryService {
     return this.dataSource.transaction(async (manager) => {
       await this.syncTableIdSequence(manager, 'InventoryLocation', 'location_id');
 
-      const location = await manager.save(
-        Location,
-        manager.create(Location, input),
-      );
+      const location = await manager.save(Location, manager.create(Location, input));
 
       return location;
     });

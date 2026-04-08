@@ -19,7 +19,9 @@ import { CartModule } from './modules/cart';
 import { OrderModule } from './modules/order';
 import { MediaModule } from './modules/media';
 import { SearchModule } from './modules/search';
+import { MerchandisingModule } from './modules/merchandising/merchandising.module';
 import { HealthController } from './health.controller';
+import { DatabasePerformanceService } from './common/database/database-performance.service';
 
 export class AppModule {
   static forRoot(): DynamicModule {
@@ -55,7 +57,7 @@ export class AppModule {
           useFactory: (configService: ConfigService) => {
             const PG_DEFAULT_PORT = 5432;
             const databaseUrl = configService.get<string>('DATABASE_URL');
-            const isDevelopment = configService.get<string>('NODE_ENV') === 'development';
+            const logSqlQueries = configService.get<string>('DB_LOG_QUERIES', 'false') === 'true';
 
             if (databaseUrl) {
               return {
@@ -64,9 +66,17 @@ export class AppModule {
                 ssl: {
                   rejectUnauthorized: false,
                 },
+                extra: {
+                  max: configService.get<number>('DB_POOL_MAX', 20),
+                  min: configService.get<number>('DB_POOL_MIN', 2),
+                  idleTimeoutMillis: configService.get<number>('DB_IDLE_TIMEOUT_MS', 30000),
+                  connectionTimeoutMillis: configService.get<number>('DB_CONNECT_TIMEOUT_MS', 15000),
+                  keepAlive: true,
+                },
                 autoLoadEntities: true,
-                synchronize: isDevelopment,
-                logging: isDevelopment ? ['query', 'error'] : ['error'],
+                // Keep synchronization disabled in app startup to avoid TypeORM schema sync concurrency warnings.
+                synchronize: false,
+                logging: logSqlQueries ? ['query', 'error'] : ['error'],
                 logger: 'advanced-console' as const,
               };
             }
@@ -78,9 +88,17 @@ export class AppModule {
               username: configService.get<string>('DB_USER', 'postgres'),
               password: configService.get<string>('DB_PASS', ''),
               database: configService.get<string>('DB_NAME', 'gk_poc_graphql'),
+              extra: {
+                max: configService.get<number>('DB_POOL_MAX', 20),
+                min: configService.get<number>('DB_POOL_MIN', 2),
+                idleTimeoutMillis: configService.get<number>('DB_IDLE_TIMEOUT_MS', 30000),
+                connectionTimeoutMillis: configService.get<number>('DB_CONNECT_TIMEOUT_MS', 15000),
+                keepAlive: true,
+              },
               autoLoadEntities: true,
-              synchronize: isDevelopment,
-              logging: isDevelopment ? ['query', 'error'] : ['error'],
+              // Keep synchronization disabled in app startup to avoid TypeORM schema sync concurrency warnings.
+              synchronize: false,
+              logging: logSqlQueries ? ['query', 'error'] : ['error'],
               logger: 'advanced-console' as const,
             };
           },
@@ -96,7 +114,9 @@ export class AppModule {
         OrderModule,
         MediaModule,
         SearchModule,
+        MerchandisingModule,
       ],
+      providers: [DatabasePerformanceService],
     };
   }
 }

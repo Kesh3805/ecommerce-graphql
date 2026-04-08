@@ -7,12 +7,12 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { VariantService } from './variant.service';
 import { VariantResolver } from './variant.resolver';
-import { Variant, VariantOptionSelection } from './entities';
+import { Variant } from './entities';
 import { Product, ProductOption } from '../catalog/entities';
-import { InventoryItemEntity } from '../inventory/entities';
+import { InventoryItemEntity, InventoryLevelEntity } from '../inventory/entities';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Variant, VariantOptionSelection, Product, ProductOption, InventoryItemEntity])],
+  imports: [TypeOrmModule.forFeature([Variant, Product, ProductOption, InventoryItemEntity, InventoryLevelEntity])],
   providers: [VariantService, VariantResolver],
   exports: [VariantService],
 })

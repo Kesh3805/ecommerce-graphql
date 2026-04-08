@@ -1,0 +1,771 @@
+# Merchandising & Product Discovery GraphQL Schema
+# Append to your existing schema.gql
+
+# =============================================
+# ENUMS
+# =============================================
+
+enum PageType {
+  HOMEPAGE
+  LANDING
+  CATEGORY_LANDING
+}
+
+enum SectionType {
+  HERO_BANNER
+  PRODUCT_CAROUSEL
+  COLLECTION_CAROUSEL
+  CATEGORY_GRID
+  RICH_TEXT
+  IMAGE_GRID
+}
+
+enum CollectionType {
+  MANUAL
+  AUTOMATED
+}
+
+enum RuleOperator {
+  EQUALS
+  NOT_EQUALS
+  GREATER_THAN
+  LESS_THAN
+  GREATER_THAN_OR_EQUAL
+  LESS_THAN_OR_EQUAL
+  CONTAINS
+  NOT_CONTAINS
+  STARTS_WITH
+  ENDS_WITH
+  IS_SET
+  IS_NOT_SET
+}
+
+enum ValueType {
+  STRING
+  NUMBER
+  BOOLEAN
+  ARRAY
+}
+
+enum FilterType {
+  CHECKBOX
+  RANGE
+  COLOR
+  SIZE
+}
+
+enum CarouselAlgorithm {
+  NEW_ARRIVALS
+  BEST_SELLING
+  TRENDING
+  RECOMMENDED
+  RECENTLY_VIEWED
+}
+
+enum CollectionProductSort {
+  MANUAL
+  BEST_SELLING
+  PRICE_ASC
+  PRICE_DESC
+  CREATED_AT_DESC
+  TITLE_ASC
+}
+
+enum RelatedStrategy {
+  FREQUENTLY_BOUGHT_TOGETHER
+  SAME_CATEGORY
+  SIMILAR_ATTRIBUTES
+  SAME_COLLECTION
+}
+
+enum TextPosition {
+  LEFT
+  CENTER
+  RIGHT
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  MODEL_3D
+}
+
+# =============================================
+# CATEGORIES
+# =============================================
+
+type Category {
+  id: ID!
+  name: String!
+  slug: String!
+  description: String
+  imageUrl: String
+  icon: String
+  depth: Int!
+  position: Int!
+  isVisible: Boolean!
+  path: String!
+  
+  # SEO
+  metaTitle: String
+  metaDescription: String
+  
+  # Relations
+  parent: Category
+  children: [Category!]!
+  ancestors: [Category!]!
+  
+  # Products
+  productCount: Int!
+  products(
+    first: Int
+    after: String
+    sortBy: ProductSortField
+    sortOrder: SortOrder
+    filters: [ProductFilterInput!]
+  ): ProductConnection!
+  
+  # Filters
+  availableFilters: [CategoryFilter!]!
+}
+
+type CategoryFilter {
+  id: ID!
+  attributeKey: String!
+  displayName: String!
+  filterType: FilterType!
+  position: Int!
+  values: [FilterValue!]!
+}
+
+type FilterValue {
+  value: String!
+  label: String!
+  count: Int!
+}
+
+type CategoryWithImage {
+  category: Category!
+  customImageUrl: String
+}
+
+# =============================================
+# COLLECTIONS
+# =============================================
+
+type Collection {
+  id: ID!
+  name: String!
+  slug: String!
+  description: String
+  imageUrl: String
+  collectionType: CollectionType!
+  isVisible: Boolean!
+  position: Int!
+  
+  # SEO
+  metaTitle: String
+  metaDescription: String
+  
+  # Scheduling
+  publishedAt: DateTime
+  unpublishedAt: DateTime
+  
+  # Rules (for automated collections)
+  rules: [CollectionRule!]
+  
+  # Products
+  productCount: Int!
+  products(
+    first: Int
+    after: String
+    sortBy: CollectionProductSort
+  ): ProductConnection!
+}
+
+type CollectionRule {
+  id: ID!
+  ruleGroup: Int!
+  field: String!
+  operator: RuleOperator!
+  value: String!
+  valueType: ValueType!
+}
+
+type CollectionConnection {
+  edges: [CollectionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type CollectionEdge {
+  cursor: String!
+  node: Collection!
+}
+
+# =============================================
+# STOREFRONT PAGES & SECTIONS
+# =============================================
+
+type StorefrontPage {
+  id: ID!
+  pageType: PageType!
+  slug: String
+  name: String!
+  isPublished: Boolean!
+  publishedAt: DateTime
+  
+  # SEO
+  metaTitle: String
+  metaDescription: String
+  
+  # Sections (ordered)
+  sections: [PageSection!]!
+}
+
+interface BaseSection {
+  id: ID!
+  sectionType: SectionType!
+  title: String
+  subtitle: String
+  position: Int!
+  isVisible: Boolean!
+}
+
+type HeroBannerSection implements BaseSection {
+  id: ID!
+  sectionType: SectionType!
+  title: String
+  subtitle: String
+  position: Int!
+  isVisible: Boolean!
+  
+  banners: [HeroBanner!]!
+  config: HeroBannerConfig!
+}
+
+type HeroBanner {
+  id: ID!
+  title: String
+  subtitle: String
+  ctaText: String
+  ctaLink: String
+  desktopImageUrl: String!
+  mobileImageUrl: String
+  videoUrl: String
+  textColor: String!
+  overlayOpacity: Float!
+  textPosition: TextPosition!
+  position: Int!
+}
+
+type HeroBannerConfig {
+  autoplay: Boolean!
+  autoplayInterval: Int!
+  showIndicators: Boolean!
+  showArrows: Boolean!
+  transition: String!
+}
+
+type ProductCarouselSection implements BaseSection {
+  id: ID!
+  sectionType: SectionType!
+  title: String
+  subtitle: String
+  position: Int!
+  isVisible: Boolean!
+  
+  # Pre-resolved products
+  products: [Product!]!
+  config: ProductCarouselConfig!
+}
+
+type ProductCarouselConfig {
+  dataSource: String!
+  collectionId: ID
+  algorithm: CarouselAlgorithm
+  productIds: [ID!]
+  maxProducts: Int!
+  showPrice: Boolean!
+  showRating: Boolean!
+  showAddToCart: Boolean!
+  slidesToShow: Int!
+  slidesToScroll: Int!
+  autoplay: Boolean!
+  autoplayInterval: Int!
+}
+
+type CollectionCarouselSection implements BaseSection {
+  id: ID!
+  sectionType: SectionType!
+  title: String
+  subtitle: String
+  position: Int!
+  isVisible: Boolean!
+  
+  collections: [Collection!]!
+  config: CollectionCarouselConfig!
+}
+
+type CollectionCarouselConfig {
+  displayStyle: String!
+  showProductCount: Boolean!
+}
+
+type CategoryGridSection implements BaseSection {
+  id: ID!
+  sectionType: SectionType!
+  title: String
+  subtitle: String
+  position: Int!
+  isVisible: Boolean!
+  
+  categories: [CategoryWithImage!]!
+  config: CategoryGridConfig!
+}
+
+type CategoryGridConfig {
+  columns: Int!
+  displayStyle: String!
+  showProductCount: Boolean!
+}
+
+type RichTextSection implements BaseSection {
+  id: ID!
+  sectionType: SectionType!
+  title: String
+  subtitle: String
+  position: Int!
+  isVisible: Boolean!
+  
+  content: String!
+  config: RichTextConfig!
+}
+
+type RichTextConfig {
+  backgroundColor: String
+  textAlignment: String!
+}
+
+type ImageGridSection implements BaseSection {
+  id: ID!
+  sectionType: SectionType!
+  title: String
+  subtitle: String
+  position: Int!
+  isVisible: Boolean!
+  
+  images: [GridImage!]!
+  config: ImageGridConfig!
+}
+
+type GridImage {
+  imageUrl: String!
+  link: String
+  alt: String!
+}
+
+type ImageGridConfig {
+  columns: Int!
+  gap: Int!
+}
+
+# Union for all section types
+union PageSection = 
+  | HeroBannerSection 
+  | ProductCarouselSection 
+  | CollectionCarouselSection 
+  | CategoryGridSection
+  | RichTextSection
+  | ImageGridSection
+
+# =============================================
+# PRODUCT STATS & ANALYTICS
+# =============================================
+
+type ProductStats {
+  productId: ID!
+  orderCount: Int!
+  orderCount30d: Int!
+  orderCount7d: Int!
+  viewCount: Int!
+  viewCount30d: Int!
+  viewCount7d: Int!
+  addToCartCount: Int!
+  addToCartCount30d: Int!
+  addToCartCount7d: Int!
+  totalRevenue: Float!
+  revenue30d: Float!
+  bestSellingScore: Float!
+  trendingScore: Float!
+  lastComputedAt: DateTime!
+}
+
+# =============================================
+# PRODUCT PAGE (Unified Response)
+# =============================================
+
+type ProductPage {
+  # Core Product Data
+  product: Product!
+  
+  # Variants with full option data
+  variants: [VariantWithOptions!]!
+  
+  # Media gallery
+  media: [ProductMedia!]!
+  
+  # Inventory summary
+  inventory: InventorySummary!
+  
+  # Related products (pre-fetched)
+  relatedProducts: [Product!]!
+  
+  # Frequently bought together
+  frequentlyBoughtTogether: [Product!]!
+  
+  # SEO data
+  seo: ProductSEO
+  
+  # Breadcrumb
+  breadcrumb: [Category!]!
+  
+  # Collection memberships
+  collections: [Collection!]!
+}
+
+type VariantWithOptions {
+  id: ID!
+  sku: String
+  price: Float!
+  compareAtPrice: Float
+  selectedOptions: [SelectedOption!]!
+  availableQuantity: Int!
+  inStock: Boolean!
+  media: [ProductMedia!]
+}
+
+type SelectedOption {
+  name: String!
+  value: String!
+}
+
+type ProductMedia {
+  id: ID!
+  mediaType: MediaType!
+  url: String!
+  altText: String
+  position: Int!
+  width: Int
+  height: Int
+  thumbnailUrl: String
+}
+
+type InventorySummary {
+  totalAvailable: Int!
+  inStock: Boolean!
+  lowStock: Boolean!
+  lowStockThreshold: Int
+}
+
+type PriceRange {
+  minPrice: Float!
+  maxPrice: Float!
+  currencyCode: String!
+}
+
+# =============================================
+# QUERIES
+# =============================================
+
+extend type Query {
+  # -------- Categories --------
+  
+  """Get category by ID or slug"""
+  category(id: ID, slug: String, storeId: ID!): Category
+  
+  """Get category tree"""
+  categoryTree(storeId: ID!, rootId: ID, maxDepth: Int): [Category!]!
+  
+  """Get all categories (flat list)"""
+  categories(
+    storeId: ID!
+    parentId: ID
+    isVisible: Boolean
+  ): [Category!]!
+  
+  """Get category breadcrumb"""
+  categoryBreadcrumb(categoryId: ID!): [Category!]!
+  
+  # -------- Collections --------
+  
+  """Get collection by ID or slug"""
+  collection(id: ID, slug: String, storeId: ID!): Collection
+  
+  """Get all collections"""
+  collections(
+    storeId: ID!
+    isVisible: Boolean
+    collectionType: CollectionType
+    first: Int
+    after: String
+  ): CollectionConnection!
+  
+  # -------- Storefront Pages --------
+  
+  """Get homepage layout with all sections resolved"""
+  homepage(storeId: ID!): StorefrontPage
+  
+  """Get any storefront page"""
+  storefrontPage(storeId: ID!, pageType: PageType!, slug: String): StorefrontPage
+  
+  # -------- Product Carousels --------
+  
+  """Get products by carousel algorithm"""
+  carouselProducts(
+    storeId: ID!
+    algorithm: CarouselAlgorithm!
+    limit: Int = 12
+  ): [Product!]!
+  
+  """Get new arrivals"""
+  newArrivals(storeId: ID!, limit: Int = 12): [Product!]!
+  
+  """Get best selling products"""
+  bestSelling(storeId: ID!, limit: Int = 12): [Product!]!
+  
+  """Get trending products"""
+  trending(storeId: ID!, limit: Int = 12): [Product!]!
+  
+  # -------- Related Products --------
+  
+  """Get related products for a product"""
+  relatedProducts(
+    productId: ID!
+    limit: Int = 12
+    strategies: [RelatedStrategy!]
+  ): [Product!]!
+  
+  """Get frequently bought together"""
+  frequentlyBoughtTogether(productId: ID!, limit: Int = 6): [Product!]!
+  
+  # -------- Product Page --------
+  
+  """Single optimized query for product detail page"""
+  productPage(
+    productId: ID
+    handle: String
+    storeId: ID!
+  ): ProductPage
+  
+  # -------- Analytics --------
+  
+  """Get product stats"""
+  productStats(productId: ID!): ProductStats
+}
+
+# =============================================
+# MUTATIONS
+# =============================================
+
+extend type Mutation {
+  # -------- Categories --------
+  
+  createCategory(input: CreateCategoryInput!): Category!
+  updateCategory(id: ID!, input: UpdateCategoryInput!): Category!
+  deleteCategory(id: ID!): Boolean!
+  moveCategory(id: ID!, newParentId: ID, newPosition: Int!): Category!
+  reorderCategories(categoryIds: [ID!]!): [Category!]!
+  
+  # -------- Collections --------
+  
+  createCollection(input: CreateCollectionInput!): Collection!
+  updateCollection(id: ID!, input: UpdateCollectionInput!): Collection!
+  deleteCollection(id: ID!): Boolean!
+  
+  # Manual collection products
+  addProductsToCollection(collectionId: ID!, productIds: [ID!]!): Collection!
+  removeProductsFromCollection(collectionId: ID!, productIds: [ID!]!): Collection!
+  reorderCollectionProducts(collectionId: ID!, productIds: [ID!]!): Collection!
+  
+  # Automated collection rules
+  setCollectionRules(collectionId: ID!, rules: [CollectionRuleInput!]!): Collection!
+  refreshCollectionCache(collectionId: ID!): Collection!
+  
+  # -------- Storefront Pages --------
+  
+  createStorefrontPage(input: CreatePageInput!): StorefrontPage!
+  updateStorefrontPage(id: ID!, input: UpdatePageInput!): StorefrontPage!
+  publishStorefrontPage(id: ID!): StorefrontPage!
+  unpublishStorefrontPage(id: ID!): StorefrontPage!
+  
+  # Section management
+  createPageSection(pageId: ID!, input: CreateSectionInput!): HeroBannerSection!
+  updatePageSection(sectionId: ID!, input: UpdateSectionInput!): HeroBannerSection!
+  deletePageSection(sectionId: ID!): Boolean!
+  reorderPageSections(pageId: ID!, sectionIds: [ID!]!): StorefrontPage!
+  
+  # Hero banner management
+  createHeroBanner(sectionId: ID!, input: HeroBannerInput!): HeroBanner!
+  updateHeroBanner(bannerId: ID!, input: HeroBannerInput!): HeroBanner!
+  deleteHeroBanner(bannerId: ID!): Boolean!
+  
+  # -------- Analytics --------
+  
+  """Record product event (view, add_to_cart, purchase)"""
+  recordProductEvent(
+    productId: ID!
+    eventType: String!
+    count: Int = 1
+  ): Boolean!
+  
+  """Trigger product stats refresh"""
+  refreshProductStats: Boolean!
+}
+
+# =============================================
+# INPUTS
+# =============================================
+
+input CreateCategoryInput {
+  storeId: ID!
+  parentId: ID
+  name: String!
+  slug: String
+  description: String
+  imageUrl: String
+  icon: String
+  isVisible: Boolean
+  metaTitle: String
+  metaDescription: String
+}
+
+input UpdateCategoryInput {
+  name: String
+  slug: String
+  description: String
+  imageUrl: String
+  icon: String
+  isVisible: Boolean
+  metaTitle: String
+  metaDescription: String
+}
+
+input CreateCollectionInput {
+  storeId: ID!
+  name: String!
+  slug: String
+  description: String
+  imageUrl: String
+  collectionType: CollectionType!
+  isVisible: Boolean
+  metaTitle: String
+  metaDescription: String
+  publishedAt: DateTime
+  unpublishedAt: DateTime
+  productIds: [ID!]
+  rules: [CollectionRuleInput!]
+}
+
+input UpdateCollectionInput {
+  name: String
+  slug: String
+  description: String
+  imageUrl: String
+  isVisible: Boolean
+  metaTitle: String
+  metaDescription: String
+  publishedAt: DateTime
+  unpublishedAt: DateTime
+}
+
+input CollectionRuleInput {
+  ruleGroup: Int!
+  field: String!
+  operator: RuleOperator!
+  value: String!
+  valueType: ValueType
+}
+
+input CreatePageInput {
+  storeId: ID!
+  pageType: PageType!
+  slug: String
+  name: String!
+  metaTitle: String
+  metaDescription: String
+}
+
+input UpdatePageInput {
+  name: String
+  slug: String
+  metaTitle: String
+  metaDescription: String
+}
+
+input CreateSectionInput {
+  sectionType: SectionType!
+  title: String
+  subtitle: String
+  position: Int
+  isVisible: Boolean
+  config: JSON!
+  visibleFrom: DateTime
+  visibleUntil: DateTime
+}
+
+input UpdateSectionInput {
+  title: String
+  subtitle: String
+  position: Int
+  isVisible: Boolean
+  config: JSON
+  visibleFrom: DateTime
+  visibleUntil: DateTime
+}
+
+input HeroBannerInput {
+  title: String
+  subtitle: String
+  ctaText: String
+  ctaLink: String
+  desktopImageUrl: String!
+  mobileImageUrl: String
+  videoUrl: String
+  position: Int
+  textColor: String
+  overlayOpacity: Float
+  textPosition: TextPosition
+  visibleFrom: DateTime
+  visibleUntil: DateTime
+}
+
+input ProductFilterInput {
+  attributeKey: String!
+  values: [String!]!
+  operator: FilterOperator
+}
+
+enum FilterOperator {
+  IN
+  NOT_IN
+  BETWEEN
+}
+
+enum ProductSortField {
+  CREATED_AT
+  UPDATED_AT
+  TITLE
+  PRICE
+  BEST_SELLING
+  TRENDING
+}
+
+enum SortOrder {
+  ASC
+  DESC
+}
+
+# Scalar for JSON fields
+scalar JSON
+scalar DateTime

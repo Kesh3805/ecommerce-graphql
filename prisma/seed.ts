@@ -82,36 +82,42 @@ async function main() {
     `);
 
     await client.query(`
-      INSERT INTO public."Product" (product_id, title, description, brand, status, store_id)
+      INSERT INTO public."Product" (
+        product_id,
+        title,
+        description,
+        brand,
+        status,
+        store_id,
+        handle,
+        meta_title,
+        meta_description,
+        og_title,
+        og_description,
+        og_image,
+        primary_image_url,
+        media_urls
+      )
       VALUES
-        (1, 'Classic Cotton Tee', 'A comfortable everyday cotton t-shirt.', 'Alice Apparel', 'ACTIVE', 1),
-        (2, 'Urban Hoodie', 'A warm fleece hoodie for the urban explorer.', 'Alice Apparel', 'ACTIVE', 1),
-        (3, 'ProPhone X', 'Flagship smartphone with a 108MP camera.', 'ProTech', 'ACTIVE', 2),
-        (4, 'UltraBook Pro 15', 'Thin and light laptop with all-day battery life.', 'ProTech', 'ACTIVE', 2)
+        (1, 'Classic Cotton Tee', 'A comfortable everyday cotton t-shirt.', 'Alice Apparel', 'ACTIVE', 1, 'classic-cotton-tee', 'Classic Cotton Tee | Alice''s Apparel', 'Comfortable everyday cotton t-shirt.', 'Classic Cotton Tee', 'Classic Cotton Tee', 'https://example.com/images/classic-tee.jpg', 'https://example.com/images/classic-tee.jpg', '["https://example.com/images/classic-tee.jpg"]'::jsonb),
+        (2, 'Urban Hoodie', 'A warm fleece hoodie for the urban explorer.', 'Alice Apparel', 'ACTIVE', 1, 'urban-hoodie', 'Urban Hoodie | Alice''s Apparel', 'Warm fleece hoodie for the urban explorer.', 'Urban Hoodie', 'Urban Hoodie', 'https://example.com/images/urban-hoodie.jpg', 'https://example.com/images/urban-hoodie.jpg', '["https://example.com/images/urban-hoodie.jpg"]'::jsonb),
+        (3, 'ProPhone X', 'Flagship smartphone with a 108MP camera.', 'ProTech', 'ACTIVE', 2, 'prophone-x', 'ProPhone X | Bob''s Electronics', 'Flagship smartphone with 108MP camera.', 'ProPhone X', 'ProPhone X', 'https://example.com/images/prophone-x.jpg', 'https://example.com/images/prophone-x.jpg', '["https://example.com/images/prophone-x.jpg"]'::jsonb),
+        (4, 'UltraBook Pro 15', 'Thin and light laptop with all-day battery life.', 'ProTech', 'ACTIVE', 2, 'ultrabook-pro-15', 'UltraBook Pro 15 | Bob''s Electronics', 'Thin and light laptop, all-day battery.', 'UltraBook Pro 15', 'UltraBook Pro 15', 'https://example.com/images/ultrabook-pro-15.jpg', 'https://example.com/images/ultrabook-pro-15.jpg', '["https://example.com/images/ultrabook-pro-15.jpg"]'::jsonb)
       ON CONFLICT (product_id)
       DO UPDATE SET
         title = EXCLUDED.title,
         description = EXCLUDED.description,
         brand = EXCLUDED.brand,
         status = EXCLUDED.status,
-        store_id = EXCLUDED.store_id
-    `);
-
-    await client.query(`
-      INSERT INTO public."ProductSEO" (product_seo_id, product_id, handle, meta_title, meta_description, og_title, og_description, og_image)
-      VALUES
-        (1, 1, 'classic-cotton-tee', 'Classic Cotton Tee | Alice''s Apparel', 'Comfortable everyday cotton t-shirt.', 'Classic Cotton Tee', 'Classic Cotton Tee', 'https://example.com/images/classic-tee.jpg'),
-        (2, 2, 'urban-hoodie', 'Urban Hoodie | Alice''s Apparel', 'Warm fleece hoodie for the urban explorer.', 'Urban Hoodie', 'Urban Hoodie', 'https://example.com/images/urban-hoodie.jpg'),
-        (3, 3, 'prophone-x', 'ProPhone X | Bob''s Electronics', 'Flagship smartphone with 108MP camera.', 'ProPhone X', 'ProPhone X', 'https://example.com/images/prophone-x.jpg'),
-        (4, 4, 'ultrabook-pro-15', 'UltraBook Pro 15 | Bob''s Electronics', 'Thin and light laptop, all-day battery.', 'UltraBook Pro 15', 'UltraBook Pro 15', 'https://example.com/images/ultrabook-pro-15.jpg')
-      ON CONFLICT (product_id)
-      DO UPDATE SET
+        store_id = EXCLUDED.store_id,
         handle = EXCLUDED.handle,
         meta_title = EXCLUDED.meta_title,
         meta_description = EXCLUDED.meta_description,
         og_title = EXCLUDED.og_title,
         og_description = EXCLUDED.og_description,
-        og_image = EXCLUDED.og_image
+        og_image = EXCLUDED.og_image,
+        primary_image_url = EXCLUDED.primary_image_url,
+        media_urls = EXCLUDED.media_urls
     `);
 
     await client.query(`
@@ -242,6 +248,355 @@ async function main() {
         is_default = EXCLUDED.is_default
     `);
 
+    const generatedProductsByStore = new Map<number, number[]>();
+    let nextProductId = 100;
+    let nextProductCategoryId = 200;
+    let nextOptionId = 100;
+    let nextOptionValueId = 200;
+    let nextVariantId = 100;
+    let nextInventoryItemId = 100;
+    let nextInventoryLevelId = 100;
+    let nextCollectionId = 100;
+    let nextCollectionRuleId = 100;
+    let nextCollectionProductLinkId = 200;
+
+    const catalogPlans = [
+      {
+        storeId: 1,
+        locationId: 1,
+        brand: 'Alice Apparel',
+        categoryIds: [1, 3],
+        baseTitles: ['Everyday Tee', 'Studio Hoodie', 'Athleisure Jogger', 'Soft Knit Cardigan', 'Layered Jacket'],
+        optionTemplate: {
+          names: ['Size', 'Color'],
+          values: [
+            ['S', 'M', 'L', 'XL'],
+            ['Black', 'White', 'Navy', 'Sand'],
+          ],
+        },
+      },
+      {
+        storeId: 2,
+        locationId: 2,
+        brand: 'Bob Electronics',
+        categoryIds: [2, 4, 5],
+        baseTitles: ['Smart Speaker', 'Noise Cancelling Headphones', 'UltraWide Monitor', 'Gaming Laptop', 'Portable SSD'],
+        optionTemplate: {
+          names: ['Config', 'Color'],
+          values: [
+            ['Base', 'Plus', 'Pro'],
+            ['Black', 'Silver', 'Graphite'],
+          ],
+        },
+      },
+    ];
+
+    for (const plan of catalogPlans) {
+      generatedProductsByStore.set(plan.storeId, []);
+
+      for (let i = 0; i < 36; i++) {
+        const productId = nextProductId++;
+        const title = `${plan.baseTitles[i % plan.baseTitles.length]} ${i + 1}`;
+        const handle = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${plan.storeId}`;
+        const mediaUrls = [
+          `https://picsum.photos/seed/${handle}-1/1200/1200`,
+          `https://picsum.photos/seed/${handle}-2/1200/1200`,
+          `https://picsum.photos/seed/${handle}-3/1200/1200`,
+        ];
+
+        await client.query(
+          `
+          INSERT INTO public."Product" (
+            product_id,
+            title,
+            description,
+            brand,
+            status,
+            store_id,
+            handle,
+            meta_title,
+            meta_description,
+            og_title,
+            og_description,
+            og_image,
+            primary_image_url,
+            media_urls
+          )
+          VALUES ($1, $2, $3, $4, 'ACTIVE', $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
+          ON CONFLICT (product_id)
+          DO UPDATE SET
+            title = EXCLUDED.title,
+            description = EXCLUDED.description,
+            brand = EXCLUDED.brand,
+            status = EXCLUDED.status,
+            store_id = EXCLUDED.store_id,
+            handle = EXCLUDED.handle,
+            meta_title = EXCLUDED.meta_title,
+            meta_description = EXCLUDED.meta_description,
+            og_title = EXCLUDED.og_title,
+            og_description = EXCLUDED.og_description,
+            og_image = EXCLUDED.og_image,
+            primary_image_url = EXCLUDED.primary_image_url,
+            media_urls = EXCLUDED.media_urls
+          `,
+          [
+            productId,
+            title,
+            `Premium ${title} from ${plan.brand}.`,
+            plan.brand,
+            plan.storeId,
+            handle,
+            `${title} | ${plan.brand}`,
+            `Buy ${title} from ${plan.brand}.`,
+            title,
+            `Shop ${title}`,
+            mediaUrls[0],
+            mediaUrls[0],
+            JSON.stringify(mediaUrls),
+          ],
+        );
+
+        for (const categoryId of plan.categoryIds.slice(0, 2)) {
+          await client.query(
+            `
+            INSERT INTO public."ProductCategory" (id, product_id, category_id)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (product_id, category_id)
+            DO NOTHING
+            `,
+            [nextProductCategoryId++, productId, categoryId],
+          );
+        }
+
+        const optionIds: number[] = [];
+        for (let optionIndex = 0; optionIndex < plan.optionTemplate.names.length; optionIndex++) {
+          const optionId = nextOptionId++;
+          optionIds.push(optionId);
+
+          await client.query(
+            `
+            INSERT INTO public."ProductOption" (option_id, name, position, product_id)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (option_id)
+            DO UPDATE SET
+              name = EXCLUDED.name,
+              position = EXCLUDED.position,
+              product_id = EXCLUDED.product_id
+            `,
+            [optionId, plan.optionTemplate.names[optionIndex], optionIndex + 1, productId],
+          );
+
+          for (const [valuePosition, optionValue] of plan.optionTemplate.values[optionIndex].entries()) {
+            await client.query(
+              `
+              INSERT INTO public."OptionValue" (value_id, value, position, option_id)
+              VALUES ($1, $2, $3, $4)
+              ON CONFLICT (value_id)
+              DO UPDATE SET
+                value = EXCLUDED.value,
+                position = EXCLUDED.position,
+                option_id = EXCLUDED.option_id
+              `,
+              [nextOptionValueId++, optionValue, valuePosition, optionId],
+            );
+          }
+        }
+
+        for (let variantIndex = 0; variantIndex < 3; variantIndex++) {
+          const inventoryItemId = nextInventoryItemId++;
+          const variantId = nextVariantId++;
+          const basePrice = plan.storeId === 1 ? 29 + i * 0.35 : 199 + i * 3.5;
+          const price = Number((basePrice + variantIndex * (plan.storeId === 1 ? 4 : 35)).toFixed(2));
+          const compareAtPrice = Number((price + (plan.storeId === 1 ? 8 : 60)).toFixed(2));
+          const sku = `${plan.storeId === 1 ? 'ALC' : 'BOB'}-${productId}-${variantIndex + 1}`;
+
+          await client.query(
+            `
+            INSERT INTO public."InventoryItem" (inventory_item_id, sku, tracked)
+            VALUES ($1, $2, true)
+            ON CONFLICT (inventory_item_id)
+            DO UPDATE SET sku = EXCLUDED.sku
+            `,
+            [inventoryItemId, sku],
+          );
+
+          await client.query(
+            `
+            INSERT INTO public."InventoryLevel" (inventory_level_id, available_quantity, reserved_quantity, inventory_item_id, location_id)
+            VALUES ($1, $2, 0, $3, $4)
+            ON CONFLICT (inventory_level_id)
+            DO UPDATE SET
+              available_quantity = EXCLUDED.available_quantity,
+              reserved_quantity = EXCLUDED.reserved_quantity,
+              inventory_item_id = EXCLUDED.inventory_item_id,
+              location_id = EXCLUDED.location_id
+            `,
+            [nextInventoryLevelId++, plan.storeId === 1 ? 120 - variantIndex * 5 : 70 - variantIndex * 4, inventoryItemId, plan.locationId],
+          );
+
+          await client.query(
+            `
+            INSERT INTO public."Variant" (
+              variant_id,
+              product_id,
+              option1_value,
+              option2_value,
+              sku,
+              price,
+              compare_at_price,
+              inventory_policy,
+              inventory_item_id,
+              is_default
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'DENY', $8, $9)
+            ON CONFLICT (variant_id)
+            DO UPDATE SET
+              product_id = EXCLUDED.product_id,
+              option1_value = EXCLUDED.option1_value,
+              option2_value = EXCLUDED.option2_value,
+              sku = EXCLUDED.sku,
+              price = EXCLUDED.price,
+              compare_at_price = EXCLUDED.compare_at_price,
+              inventory_item_id = EXCLUDED.inventory_item_id,
+              is_default = EXCLUDED.is_default
+            `,
+            [
+              variantId,
+              productId,
+              plan.optionTemplate.values[0][variantIndex],
+              plan.optionTemplate.values[1][variantIndex],
+              sku,
+              price,
+              compareAtPrice,
+              inventoryItemId,
+              variantIndex === 0,
+            ],
+          );
+        }
+
+        generatedProductsByStore.get(plan.storeId)?.push(productId);
+      }
+    }
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_product_store_status_published
+        ON public."Product" (store_id, status, published_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_productcategory_category
+        ON public."ProductCategory" (category_id);
+      CREATE INDEX IF NOT EXISTS idx_collectionrule_collection_group
+        ON public."CollectionRule" (collection_id, rule_group);
+      CREATE INDEX IF NOT EXISTS idx_collection_store_visible_position
+        ON public."Collection" (store_id, is_visible, position);
+      CREATE INDEX IF NOT EXISTS idx_variant_product_price
+        ON public."Variant" (product_id, price);
+    `);
+
+    for (const plan of catalogPlans) {
+      const productIds = generatedProductsByStore.get(plan.storeId) || [];
+      const manualCollectionId = nextCollectionId++;
+      const automatedCollectionId = nextCollectionId++;
+
+      await client.query(
+        `
+        INSERT INTO public."Collection" (
+          collection_id,
+          store_id,
+          name,
+          slug,
+          description,
+          collection_type,
+          image_url,
+          is_visible,
+          position,
+          meta_title,
+          meta_description
+        )
+        VALUES
+          ($1, $2, $3, $4, $5, 'MANUAL', $6, true, 1, $7, $8),
+          ($9, $2, $10, $11, $12, 'AUTOMATED', $13, true, 2, $14, $15)
+        ON CONFLICT (collection_id)
+        DO UPDATE SET
+          store_id = EXCLUDED.store_id,
+          name = EXCLUDED.name,
+          slug = EXCLUDED.slug,
+          description = EXCLUDED.description,
+          collection_type = EXCLUDED.collection_type,
+          image_url = EXCLUDED.image_url,
+          is_visible = EXCLUDED.is_visible,
+          position = EXCLUDED.position,
+          meta_title = EXCLUDED.meta_title,
+          meta_description = EXCLUDED.meta_description
+        `,
+        [
+          manualCollectionId,
+          plan.storeId,
+          `${plan.brand} Featured Picks`,
+          `${plan.brand.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-featured`,
+          `Manually curated products for ${plan.brand}.`,
+          `https://picsum.photos/seed/${plan.storeId}-manual-collection/1600/900`,
+          `${plan.brand} Featured Picks`,
+          `Curated picks for ${plan.brand}`,
+          automatedCollectionId,
+          `${plan.brand} Auto Collection`,
+          `${plan.brand.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-auto`,
+          `Automatically matched products for ${plan.brand}.`,
+          `https://picsum.photos/seed/${plan.storeId}-auto-collection/1600/900`,
+          `${plan.brand} Auto Collection`,
+          `Automated collection for ${plan.brand}`,
+        ],
+      );
+
+      for (const [position, productId] of productIds.slice(0, 14).entries()) {
+        await client.query(
+          `
+          INSERT INTO public."CollectionProduct" (id, collection_id, product_id, position)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (collection_id, product_id)
+          DO UPDATE SET position = EXCLUDED.position
+          `,
+          [nextCollectionProductLinkId++, manualCollectionId, productId, position],
+        );
+      }
+
+      await client.query('DELETE FROM public."CollectionRule" WHERE collection_id = $1', [automatedCollectionId]);
+
+      if (plan.storeId === 1) {
+        await client.query(
+          `
+          INSERT INTO public."CollectionRule" (rule_id, collection_id, rule_group, field, operator, value, value_type)
+          VALUES ($1, $2, 0, 'brand', 'CONTAINS', 'Alice Apparel', 'STRING')
+          ON CONFLICT (rule_id)
+          DO UPDATE SET
+            collection_id = EXCLUDED.collection_id,
+            rule_group = EXCLUDED.rule_group,
+            field = EXCLUDED.field,
+            operator = EXCLUDED.operator,
+            value = EXCLUDED.value,
+            value_type = EXCLUDED.value_type
+          `,
+          [nextCollectionRuleId++, automatedCollectionId],
+        );
+      } else {
+        await client.query(
+          `
+          INSERT INTO public."CollectionRule" (rule_id, collection_id, rule_group, field, operator, value, value_type)
+          VALUES
+            ($1, $2, 0, 'brand', 'CONTAINS', 'Bob Electronics', 'STRING'),
+            ($3, $2, 0, 'category', 'EQUALS', '2', 'NUMBER')
+          ON CONFLICT (rule_id)
+          DO UPDATE SET
+            collection_id = EXCLUDED.collection_id,
+            rule_group = EXCLUDED.rule_group,
+            field = EXCLUDED.field,
+            operator = EXCLUDED.operator,
+            value = EXCLUDED.value,
+            value_type = EXCLUDED.value_type
+          `,
+          [nextCollectionRuleId++, automatedCollectionId, nextCollectionRuleId++, automatedCollectionId],
+        );
+      }
+    }
+
     await client.query(`
       INSERT INTO public."Customer" (customer_id, user_id)
       VALUES
@@ -258,13 +613,15 @@ async function main() {
       { table: 'InventoryLocation', column: 'location_id' },
       { table: 'Category', column: 'category_id' },
       { table: 'Product', column: 'product_id' },
-      { table: 'ProductSEO', column: 'product_seo_id' },
       { table: 'ProductOption', column: 'option_id' },
       { table: 'OptionValue', column: 'value_id' },
       { table: 'ProductCategory', column: 'id' },
       { table: 'InventoryItem', column: 'inventory_item_id' },
       { table: 'InventoryLevel', column: 'inventory_level_id' },
       { table: 'Variant', column: 'variant_id' },
+      { table: 'Collection', column: 'collection_id' },
+      { table: 'CollectionProduct', column: 'id' },
+      { table: 'CollectionRule', column: 'rule_id' },
       { table: 'Customer', column: 'customer_id' },
     ];
 

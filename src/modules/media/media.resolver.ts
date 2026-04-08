@@ -15,6 +15,12 @@ export class MediaResolver {
     return this.mediaService.attachProductMedia(input);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Mutation(() => Boolean)
+  async deleteProductMedia(@Args('mediaId', { type: () => Int }) mediaId: number): Promise<boolean> {
+    return this.mediaService.deleteProductMedia(mediaId);
+  }
+
   @Query(() => [ProductMedia])
   async productMedia(@Args('productId', { type: () => Int }) productId: number): Promise<ProductMedia[]> {
     return this.mediaService.productMedia(productId);

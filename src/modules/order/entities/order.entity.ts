@@ -1,5 +1,17 @@
 import { Field, Float, Int, ObjectType } from '@nestjs/graphql';
-import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, OneToMany, OneToOne, PrimaryGeneratedColumn, Relation, UpdateDateColumn } from 'typeorm';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  OneToOne,
+  PrimaryGeneratedColumn,
+  Relation,
+  UpdateDateColumn,
+} from 'typeorm';
 import { FulfillmentStatus, OrderStatus, PaymentStatus } from '../../../common/enums/ecommerce.enums';
 
 @ObjectType()

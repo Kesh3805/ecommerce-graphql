@@ -1,9 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { InventoryPolicy } from '../../common/enums/ecommerce.enums';
 import { Product, ProductOption } from '../catalog/entities';
-import { InventoryItem } from '../inventory/entities/inventory.entity';
+import { InventoryItem, InventoryLevelEntity } from '../inventory/entities/inventory.entity';
 import { GenerateVariantsInput, UpdateVariantInput, CreateVariantInput, BulkUpdateVariantPricesInput } from './dto';
 import { BulkUpdateResponse, GenerateVariantsResponse } from './dto/variant.response';
 import { Variant } from './entities';
@@ -16,23 +16,83 @@ interface OptionWithValues {
 }
 
 @Injectable()
-export class VariantService {
+export class VariantService implements OnModuleInit {
+  private readonly logger = new Logger(VariantService.name);
+
   constructor(
     private readonly dataSource: DataSource,
     @InjectRepository(Variant) private readonly variantRepo: Repository<Variant>,
     @InjectRepository(Product) private readonly productRepo: Repository<Product>,
     @InjectRepository(ProductOption) private readonly optionRepo: Repository<ProductOption>,
     @InjectRepository(InventoryItem) private readonly inventoryItemRepo: Repository<InventoryItem>,
+    @InjectRepository(InventoryLevelEntity) private readonly inventoryLevelRepo: Repository<InventoryLevelEntity>,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.ensureVariantMediaUrlsColumn();
+    } catch (error) {
+      this.logger.error('Failed to ensure Variant.media_urls column exists', error as Error);
+      throw error;
+    }
+  }
+
+  private async ensureVariantMediaUrlsColumn(manager: EntityManager = this.dataSource.manager): Promise<void> {
+    await manager.query('ALTER TABLE "Variant" ADD COLUMN IF NOT EXISTS "media_urls" TEXT[]');
+  }
+
+  private normalizeMediaUrls(mediaUrls?: string[] | null): string[] | null {
+    if (!mediaUrls) {
+      return null;
+    }
+
+    const normalized = [...new Set(mediaUrls.map((url) => String(url ?? '').trim()).filter((url) => /^https?:\/\//i.test(url)))];
+    return normalized.length > 0 ? normalized : null;
+  }
 
   async findByProductId(productId: number): Promise<Variant[]> {
     const variants = await this.variantRepo.find({
       where: { product_id: productId },
-      relations: { inventory_item: { levels: true } },
+      relations: { inventory_item: true },
       order: { option1_value: 'ASC', option2_value: 'ASC', option3_value: 'ASC' },
     });
 
-    return variants.map((variant) => this.mapVariantWithTitle(variant));
+    const inventoryItemIds = variants
+      .map((variant) => variant.inventory_item_id)
+      .filter((inventoryItemId): inventoryItemId is number => typeof inventoryItemId === 'number');
+
+    const levelsByInventoryItemId =
+      inventoryItemIds.length > 0
+        ? await this.inventoryLevelRepo
+            .find({
+              where: { inventory_item_id: In(inventoryItemIds) },
+              order: { location_id: 'ASC' },
+            })
+            .then((rows) =>
+              rows.reduce<Map<number, InventoryLevelEntity[]>>((acc, row) => {
+                const list = acc.get(row.inventory_item_id) ?? [];
+                list.push(row);
+                acc.set(row.inventory_item_id, list);
+                return acc;
+              }, new Map<number, InventoryLevelEntity[]>()),
+            )
+        : new Map<number, InventoryLevelEntity[]>();
+
+    const hydrated = variants.map((variant) => {
+      if (!variant.inventory_item || variant.inventory_item_id == null) {
+        return variant;
+      }
+
+      return {
+        ...variant,
+        inventory_item: {
+          ...variant.inventory_item,
+          levels: levelsByInventoryItemId.get(variant.inventory_item_id) ?? [],
+        },
+      };
+    });
+
+    return hydrated.map((variant) => this.mapVariantWithTitle(variant));
   }
 
   async variantAvailability(variantId: number): Promise<boolean> {
@@ -63,7 +123,10 @@ export class VariantService {
   }
 
   async create(input: CreateVariantInput): Promise<Variant> {
-    const { product_id, create_inventory, ...variantData } = input;
+    const { product_id, create_inventory, media_urls, ...variantData } = input;
+    const normalizedMediaUrls = this.normalizeMediaUrls(media_urls);
+
+    await this.ensureVariantMediaUrlsColumn();
 
     const product = await this.productRepo.findOne({ where: { product_id } });
     if (!product) {
@@ -99,6 +162,7 @@ export class VariantService {
         manager.create(Variant, {
           product_id,
           ...variantData,
+          media_urls: normalizedMediaUrls ?? undefined,
           inventory_policy: variantData.inventory_policy ?? InventoryPolicy.DENY,
           inventory_item_id: inventoryItemId,
           is_default: false,
@@ -115,7 +179,10 @@ export class VariantService {
   }
 
   async update(input: UpdateVariantInput): Promise<Variant> {
-    const { variant_id, ...updateData } = input;
+    const { variant_id, media_urls, ...updateData } = input;
+    const normalizedMediaUrls = media_urls === undefined ? undefined : this.normalizeMediaUrls(media_urls);
+
+    await this.ensureVariantMediaUrlsColumn();
     const variant = await this.findOne(variant_id);
 
     if (updateData.sku) {
@@ -141,7 +208,16 @@ export class VariantService {
         );
       }
 
-      await manager.update(Variant, { variant_id }, updateData);
+      await manager.update(
+        Variant,
+        {
+          variant_id,
+        },
+        {
+          ...updateData,
+          ...(normalizedMediaUrls !== undefined ? { media_urls: normalizedMediaUrls } : {}),
+        },
+      );
       const hydratedVariant = await manager.findOneOrFail(Variant, {
         where: { variant_id },
         relations: { inventory_item: { levels: true }, product: true },
@@ -152,15 +228,15 @@ export class VariantService {
   }
 
   async delete(variantId: number): Promise<boolean> {
-    const variant = await this.variantRepo.findOne({ where: { variant_id: variantId } });
-    if (!variant) {
-      throw new NotFoundException(`Variant with ID ${variantId} not found`);
-    }
-
     await this.dataSource.transaction(async (manager) => {
-      await manager.delete(Variant, { variant_id: variantId });
-      if (variant.inventory_item_id) {
-        await manager.delete(InventoryItem, { inventory_item_id: variant.inventory_item_id });
+      const deletedRows = await manager.query('DELETE FROM "Variant" WHERE "variant_id" = $1 RETURNING "inventory_item_id"', [variantId]);
+      if (!Array.isArray(deletedRows) || deletedRows.length === 0) {
+        throw new NotFoundException(`Variant with ID ${variantId} not found`);
+      }
+
+      const inventoryItemId = Number(deletedRows[0]?.inventory_item_id);
+      if (Number.isInteger(inventoryItemId) && inventoryItemId > 0) {
+        await manager.delete(InventoryItem, { inventory_item_id: inventoryItemId });
       }
     });
 
@@ -293,14 +369,10 @@ export class VariantService {
       throw new Error(`Invalid table/column combination: ${table}/${column}`);
     }
 
-    const maxRes = await manager.query(
-      `SELECT COALESCE(MAX("${column}"), 0)::int AS max_id FROM public."${table}"`,
-    );
+    const maxRes = await manager.query(`SELECT COALESCE(MAX("${column}"), 0)::int AS max_id FROM public."${table}"`);
     const nextValue = Number(maxRes[0]?.max_id ?? 0) + 1;
 
-    const serialRes = await manager.query(
-      `SELECT pg_get_serial_sequence('public."${table}"', '${column}') AS seq`,
-    );
+    const serialRes = await manager.query(`SELECT pg_get_serial_sequence('public."${table}"', '${column}') AS seq`);
     const serialSeq = serialRes[0]?.seq as string | null;
 
     const defaultRes = await manager.query(

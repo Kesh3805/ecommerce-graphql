@@ -38,7 +38,9 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     }
 
     const validatedUser = user as User;
-    const normalizedStatus = String(validatedUser.status ?? '').trim().toLowerCase();
+    const normalizedStatus = String(validatedUser.status ?? '')
+      .trim()
+      .toLowerCase();
     const activeStatus = String(APP_CONSTANTS.ACTIVE_STATUS).trim().toLowerCase();
 
     if (normalizedStatus !== activeStatus) {

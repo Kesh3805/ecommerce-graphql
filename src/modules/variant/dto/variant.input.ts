@@ -58,6 +58,11 @@ export class UpdateVariantInput {
   @Min(0)
   compare_at_price?: number;
 
+  @Field(() => [String], { nullable: true })
+  @IsOptional()
+  @IsString({ each: true })
+  media_urls?: string[];
+
   @Field(() => Float, { nullable: true })
   @IsOptional()
   @IsNumber()
@@ -127,6 +132,11 @@ export class CreateVariantInput {
   @IsNumber()
   @Min(0)
   compare_at_price?: number;
+
+  @Field(() => [String], { nullable: true })
+  @IsOptional()
+  @IsString({ each: true })
+  media_urls?: string[];
 
   @Field(() => Float, { nullable: true })
   @IsOptional()
