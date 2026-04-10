@@ -18,7 +18,7 @@ export class DatabasePerformanceService implements OnModuleInit {
       'CREATE INDEX IF NOT EXISTS "IDX_Product_created_at_desc" ON "Product" ("created_at" DESC, "product_id" DESC)',
       'CREATE INDEX IF NOT EXISTS "IDX_Product_store_created_at_desc" ON "Product" ("store_id", "created_at" DESC, "product_id" DESC)',
       'CREATE INDEX IF NOT EXISTS "IDX_Product_store_status_created_at_desc" ON "Product" ("store_id", "status", "created_at" DESC, "product_id" DESC)',
-      'CREATE INDEX IF NOT EXISTS "IDX_ProductCategory_product_id" ON "ProductCategory" ("product_id")',
+      'CREATE INDEX IF NOT EXISTS "IDX_Product_category_id" ON "Product" ("category_id")',
       'CREATE INDEX IF NOT EXISTS "IDX_ProductOption_product_id" ON "ProductOption" ("product_id")',
       'CREATE INDEX IF NOT EXISTS "IDX_OptionValue_option_id" ON "OptionValue" ("option_id")',
       'CREATE INDEX IF NOT EXISTS "IDX_Metafield_owner_type_owner_id" ON "Metafield" ("owner_type", "owner_id")',

@@ -17,7 +17,6 @@ type RawVariant = {
   option3_value?: string;
   price?: string | null;
   compare_at_price?: string | null;
-  inventory_available?: number | null;
 };
 
 type ProductRow = {
@@ -58,7 +57,6 @@ type IndexedProductDetailDocument = {
     option3_value?: string;
     price?: string;
     compare_at_price?: string;
-    inventory_available?: number;
   }>;
   handle_lower: string;
   country_codes: string[];
@@ -164,10 +162,6 @@ function sanitizeVariants(rawVariants: RawVariant[]): IndexedProductDetailDocume
         option3_value: variant.option3_value ?? undefined,
         price: variant.price != null ? String(variant.price) : undefined,
         compare_at_price: variant.compare_at_price != null ? String(variant.compare_at_price) : undefined,
-        inventory_available:
-          variant.inventory_available != null && Number.isFinite(Number(variant.inventory_available))
-            ? Number(variant.inventory_available)
-            : undefined,
       };
     })
     .filter((variant): variant is NonNullable<typeof variant> => variant != null);
@@ -236,14 +230,7 @@ async function main(): Promise<void> {
   await ensureIndex(esClient, esIndex);
 
   const rows = (await sql`
-    WITH inventory AS (
-      SELECT
-        level.inventory_item_id,
-        COALESCE(SUM(level.available_quantity), 0)::int AS inventory_available
-      FROM "InventoryLevel" level
-      GROUP BY level.inventory_item_id
-    ),
-    options AS (
+    WITH options AS (
       SELECT
         option.product_id,
         jsonb_agg(
@@ -275,13 +262,11 @@ async function main(): Promise<void> {
             'option2_value', variant.option2_value,
             'option3_value', variant.option3_value,
             'price', CASE WHEN variant.price IS NULL THEN NULL ELSE variant.price::text END,
-            'compare_at_price', CASE WHEN variant.compare_at_price IS NULL THEN NULL ELSE variant.compare_at_price::text END,
-            'inventory_available', inventory.inventory_available
+            'compare_at_price', CASE WHEN variant.compare_at_price IS NULL THEN NULL ELSE variant.compare_at_price::text END
           )
           ORDER BY variant.is_default DESC, variant.variant_id ASC
         ) AS variants
       FROM "Variant" variant
-      LEFT JOIN inventory ON inventory.inventory_item_id = variant.inventory_item_id
       GROUP BY variant.product_id
     ),
     countries AS (

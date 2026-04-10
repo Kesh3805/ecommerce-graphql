@@ -57,20 +57,9 @@ model Category {
   parent   Category?  @relation("CategoryHierarchy", fields: [parent_id], references: [category_id])
   children Category[] @relation("CategoryHierarchy")
 
-  products ProductCategory[]
+  products Product[]
 }
 
-model ProductCategory {
-  id Int @id @default(autoincrement())
-
-  product_id  Int
-  category_id Int
-
-  product  Product  @relation(fields: [product_id], references: [product_id], onDelete: Cascade)
-  category Category @relation(fields: [category_id], references: [category_id], onDelete: Cascade)
-
-  @@unique([product_id, category_id])
-}
 
 //////////////////////////////////////////////////////
 // PRODUCTS
@@ -84,10 +73,10 @@ model Product {
   store_id Int
   store    Store @relation(fields: [store_id], references: [store_id])
 
-  categories ProductCategory[]
+  category_id Int?
+  category    Category? @relation(fields: [category_id], references: [category_id], onDelete: SetNull)
   options    ProductOption[]
   variants   Variant[]
-  attributes ProductAttributeValue[]
 
   seo ProductSEO?
 }
@@ -188,19 +177,6 @@ model InventoryLevel {
   inventory_item    InventoryItem @relation(fields: [inventory_item_id], references: [inventory_item_id], onDelete: Cascade)
 }
 
-//////////////////////////////////////////////////////
-// ATTRIBUTES
-//////////////////////////////////////////////////////
-
-model ProductAttributeValue {
-  id Int @id @default(autoincrement())
-
-  product_id Int
-  product    Product @relation(fields: [product_id], references: [product_id], onDelete: Cascade)
-
-  attribute_key String
-  value         String
-}
 
 //////////////////////////////////////////////////////
 // CART
@@ -252,3 +228,6 @@ model OrderItem {
   variant_id Int
   variant    Variant @relation(fields: [variant_id], references: [variant_id])
 }
+
+
+

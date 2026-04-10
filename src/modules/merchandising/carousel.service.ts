@@ -6,7 +6,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
-import { Product, ProductCategory } from '../catalog/entities';
+import { Product } from '../catalog/entities';
 import { CollectionService } from './collection.service';
 import { CarouselProduct } from './dto';
 import { ProductStatus } from '../../common/enums/ecommerce.enums';
@@ -22,8 +22,6 @@ export class CarouselService {
   constructor(
     @InjectRepository(Product)
     private productRepo: Repository<Product>,
-    @InjectRepository(ProductCategory)
-    private productCategoryRepo: Repository<ProductCategory>,
     private collectionService: CollectionService,
   ) {}
 
@@ -170,29 +168,27 @@ export class CarouselService {
    * Get products in same category
    */
   async getSameCategoryProducts(productId: number, limit: number = 6): Promise<CarouselProduct[]> {
-    // Get product's categories
-    const productCategories = await this.productCategoryRepo.find({
+    const sourceProduct = await this.productRepo.findOne({
       where: { product_id: productId },
+      select: { category_id: true },
     });
 
-    if (!productCategories.length) {
+    const categoryId = sourceProduct?.category_id ?? null;
+    if (!categoryId) {
       return [];
     }
 
-    const categoryIds = productCategories.map((pc) => pc.category_id);
-
-    // Get other products in same categories
-    const relatedLinks = await this.productCategoryRepo
-      .createQueryBuilder('pc')
-      .innerJoin('pc.product', 'p')
-      .where('pc.category_id IN (:...categoryIds)', { categoryIds })
-      .andWhere('pc.product_id != :productId', { productId })
+    const relatedRows = await this.productRepo
+      .createQueryBuilder('p')
+      .where('p.category_id = :categoryId', { categoryId })
+      .andWhere('p.product_id != :productId', { productId })
       .andWhere('p.status = :status', { status: ProductStatus.ACTIVE })
-      .select('DISTINCT pc.product_id', 'product_id')
+      .select('p.product_id', 'product_id')
+      .addOrderBy('p.created_at', 'DESC')
       .take(limit)
       .getRawMany();
 
-    const relatedIds = relatedLinks.map((r) => r.product_id);
+    const relatedIds = relatedRows.map((row) => Number(row.product_id)).filter((id) => Number.isInteger(id) && id > 0);
 
     if (!relatedIds.length) {
       return [];

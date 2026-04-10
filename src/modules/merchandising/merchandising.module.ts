@@ -9,7 +9,7 @@ import { CollectionService } from './collection.service';
 import { CarouselService } from './carousel.service';
 import { CollectionResolver } from './collection.resolver';
 import { Collection, CollectionProduct, CollectionRule } from './entities';
-import { Product, Category, ProductCategory, ProductCountryAvailability } from '../catalog/entities';
+import { Product, Category, ProductCountryAvailability } from '../catalog/entities';
 import { Variant } from '../variant/entities';
 
 @Module({
@@ -22,7 +22,6 @@ import { Variant } from '../variant/entities';
       // Catalog entities (for queries)
       Product,
       Category,
-      ProductCategory,
       ProductCountryAvailability,
       // Variant entity
       Variant,

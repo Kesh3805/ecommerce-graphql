@@ -186,13 +186,25 @@ export class CollectionResolver {
     @Args('offset', { type: () => Int, nullable: true, defaultValue: 0 }) offset?: number,
     @Args('countryCode', { type: () => String, nullable: true }) countryCode?: string,
   ): Promise<Product[]> {
-    const { products } = await this.collectionService.getCollectionProducts(collection.collection_id, limit, offset, countryCode);
-    return products;
+    try {
+      const { products } = await this.collectionService.getCollectionProducts(collection.collection_id, limit, offset, countryCode);
+      return products;
+    } catch {
+      return [];
+    }
   }
 
   @ResolveField(() => Int, { description: 'Total product count in collection' })
   async product_count(@Parent() collection: Collection): Promise<number> {
-    return this.collectionService.getProductCount(collection.collection_id);
+    if (typeof collection.product_count === 'number') {
+      return collection.product_count;
+    }
+
+    try {
+      return await this.collectionService.getProductCount(collection.collection_id);
+    } catch {
+      return 0;
+    }
   }
 
   @ResolveField(() => [CollectionRule], { nullable: true, description: 'Collection rules' })
@@ -200,7 +212,12 @@ export class CollectionResolver {
     if (collection.rules) {
       return collection.rules;
     }
-    const full = await this.collectionService.findById(collection.collection_id);
-    return full.rules;
+
+    try {
+      const full = await this.collectionService.findById(collection.collection_id);
+      return full.rules;
+    } catch {
+      return [];
+    }
   }
 }

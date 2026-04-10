@@ -1,10 +1,10 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, forwardRef, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, DataSource, EntityManager, In, IsNull, QueryFailedError, Repository } from 'typeorm';
+import { Brackets, DataSource, EntityManager, In, IsNull, Repository } from 'typeorm';
 import { Client } from '@elastic/elasticsearch';
 import { InventoryPolicy, ProductStatus } from '../../common/enums/ecommerce.enums';
 import { InventoryLevelEntity } from '../inventory/entities';
-import { User } from '../user/entities/user.entity';
+import { User, UserRole } from '../user/entities/user.entity';
 import { Variant } from '../variant/entities';
 import { VariantService } from '../variant/variant.service';
 import {
@@ -23,7 +23,7 @@ import {
 } from './dto';
 import { BrandRecordResponse, BulkImportProductRowResult, BulkImportProductsResponse, PaginatedProductsResponse } from './dto/product.response';
 import { PublicStorefrontProduct, PublicStorefrontStore } from './dto/storefront.response';
-import { Category, OptionValue, Product, ProductCategory, ProductCountryAvailability, ProductMetafield, ProductOption, ProductSEO, Store } from './entities';
+import { Category, OptionValue, Product, ProductCountryAvailability, ProductMetafield, ProductOption, ProductSEO, Store } from './entities';
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_OPTIONS_PER_PRODUCT = 3;
@@ -57,11 +57,10 @@ export class ProductService {
 
   constructor(
     private readonly dataSource: DataSource,
-    private readonly variantService: VariantService,
+    @Inject(forwardRef(() => VariantService)) private readonly variantService: VariantService,
     @InjectRepository(Product) private readonly productRepo: Repository<Product>,
     @InjectRepository(ProductOption) private readonly optionRepo: Repository<ProductOption>,
     @InjectRepository(OptionValue) private readonly optionValueRepo: Repository<OptionValue>,
-    @InjectRepository(ProductCategory) private readonly productCategoryRepo: Repository<ProductCategory>,
     @InjectRepository(Category) private readonly categoryRepo: Repository<Category>,
     @InjectRepository(Store) private readonly storeRepo: Repository<Store>,
     @InjectRepository(ProductMetafield) private readonly metafieldRepo: Repository<ProductMetafield>,
@@ -259,6 +258,11 @@ export class ProductService {
   }
 
   private mapIndexedDocumentToPublicProduct(source: IndexedPublicProductDocument): PublicStorefrontProduct {
+    const variants = (source.variants ?? []).map((variant) => ({
+      ...variant,
+      inventory_available: undefined,
+    }));
+
     return {
       product_id: source.product_id,
       store_id: source.store_id,
@@ -272,7 +276,7 @@ export class ProductService {
       price: source.price,
       compare_at_price: source.compare_at_price,
       options: source.options,
-      variants: source.variants,
+      variants,
     };
   }
 
@@ -502,7 +506,7 @@ export class ProductService {
         where: { product_id: In(productIds) },
         relations: {
           options: { values: true },
-          category_links: { category: true },
+          category: true,
         },
       });
 
@@ -512,7 +516,7 @@ export class ProductService {
         .filter((product): product is Product => Boolean(product))
         .map((product) => ({
           ...this.withProjectedFields(product),
-          categories: (product.category_links ?? []).map((link) => link.category),
+          categories: product.category ? [product.category] : [],
           options: (product.options ?? []).map((option) => ({
             ...option,
             values: [...(option.values ?? [])].sort((a, b) => a.position - b.position),
@@ -611,8 +615,14 @@ export class ProductService {
     );
     const collectionIds = collectionRows.map((row) => Number(row.collection_id)).filter((value) => Number.isFinite(value));
 
+    const sanitizedVariants = (publicProduct.variants ?? []).map((variant) => ({
+      ...variant,
+      inventory_available: undefined,
+    }));
+
     const document: IndexedPublicProductDocument = {
       ...publicProduct,
+      variants: sanitizedVariants,
       handle_lower: this.getEsDocumentId(publicProduct.handle),
       store_slug: this.normalizeStoreSlug(publicProduct.store_name),
       country_codes: countryCodes,
@@ -632,6 +642,16 @@ export class ProductService {
       console.error('Failed to sync product ' + publicProduct.handle + ' to Elasticsearch:', error);
     }
   }
+
+  async refreshPublicSearchForProduct(productId: number): Promise<void> {
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return;
+    }
+
+    this.invalidatePublicCaches();
+    await this.syncPublicProductToSearchIndex(String(productId));
+  }
+
   private normalizeCountryCode(value: string | undefined): string | undefined {
     const normalized = (value ?? '').trim().toUpperCase();
     if (!normalized) {
@@ -772,21 +792,51 @@ export class ProductService {
     return user?.role === 'ADMIN';
   }
 
+  private assertAdmin(actor?: User): asserts actor is User {
+    if (!actor) {
+      throw new ForbiddenException('Authentication is required');
+    }
+
+    if (actor.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Only admins can manage categories');
+    }
+  }
+
   private normalize(value: string | undefined): string {
     return (value ?? '').trim().toLowerCase();
   }
 
+  private isUuid(value: string | undefined): boolean {
+    if (!value) {
+      return false;
+    }
+
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.trim());
+  }
+
   private async findStoresForUser(user: User): Promise<Store[]> {
-    const normalizedUserId = String(user.id);
+    const normalizedUserId = String(user.id ?? '').trim();
     const normalizedEmail = this.normalize(user.email);
     const firstName = this.normalize(user.name?.split(/\s+/)[0]);
 
-    const direct = await this.storeRepo
-      .createQueryBuilder('store')
-      .where('store.owner_user_id = :userId', { userId: normalizedUserId })
-      .orWhere('LOWER(store.owner_user_id) = :ownerEmail', { ownerEmail: normalizedEmail })
-      .orderBy('store.created_at', 'DESC')
-      .getMany();
+    const directQuery = this.storeRepo.createQueryBuilder('store');
+    let hasPredicate = false;
+
+    if (this.isUuid(normalizedUserId)) {
+      directQuery.where('store.owner_user_id = :userId', { userId: normalizedUserId });
+      hasPredicate = true;
+    }
+
+    if (normalizedEmail) {
+      if (hasPredicate) {
+        directQuery.orWhere('LOWER(store.owner_user_id::text) = :ownerEmail', { ownerEmail: normalizedEmail });
+      } else {
+        directQuery.where('LOWER(store.owner_user_id::text) = :ownerEmail', { ownerEmail: normalizedEmail });
+      }
+      hasPredicate = true;
+    }
+
+    const direct = hasPredicate ? await directQuery.orderBy('store.created_at', 'DESC').getMany() : [];
 
     if (direct.length > 0) {
       return direct;
@@ -1963,6 +2013,74 @@ export class ProductService {
     return merged;
   }
 
+  private normalizeCategoryOptionTemplates(source: unknown): Array<{ name: string; values: string[] }> {
+    if (!Array.isArray(source)) {
+      return [];
+    }
+
+    const normalized: Array<{ name: string; values: string[] }> = [];
+    const seenNames = new Set<string>();
+
+    for (const entry of source) {
+      const name = String((entry as { name?: unknown })?.name ?? '').trim();
+      if (!name) {
+        continue;
+      }
+
+      const dedupeName = name.toLowerCase();
+      if (seenNames.has(dedupeName)) {
+        continue;
+      }
+
+      const rawValues = (entry as { values?: unknown })?.values;
+      const values = Array.isArray(rawValues)
+        ? [...new Set(rawValues.map((value) => String(value ?? '').trim()).filter((value) => value.length > 0))]
+        : [];
+
+      seenNames.add(dedupeName);
+      normalized.push({ name, values });
+    }
+
+    return normalized;
+  }
+
+  private mergeCategoryOptionTemplates(
+    existing: Array<{ name: string; values: string[] }>,
+    incoming: Array<{ name: string; values: string[] }>,
+  ): Array<{ name: string; values: string[] }> {
+    const merged = existing.map((template) => ({
+      name: template.name,
+      values: [...template.values],
+    }));
+
+    for (const incomingTemplate of incoming) {
+      const dedupeName = incomingTemplate.name.toLowerCase();
+      const existingIndex = merged.findIndex((template) => template.name.toLowerCase() === dedupeName);
+
+      if (existingIndex >= 0) {
+        const valueSet = new Set(merged[existingIndex].values.map((value) => value.toLowerCase()));
+        for (const value of incomingTemplate.values) {
+          const dedupeValue = value.toLowerCase();
+          if (!valueSet.has(dedupeValue)) {
+            merged[existingIndex].values.push(value);
+            valueSet.add(dedupeValue);
+          }
+        }
+      } else {
+        merged.push({
+          name: incomingTemplate.name,
+          values: [...incomingTemplate.values],
+        });
+      }
+    }
+
+    return this.normalizeCategoryOptionTemplates(merged);
+  }
+
+  private areCategoryOptionTemplatesEqual(existing: Array<{ name: string; values: string[] }>, next: Array<{ name: string; values: string[] }>): boolean {
+    return JSON.stringify(existing) === JSON.stringify(next);
+  }
+
   private getCategoryOwnerUserId(category: Category): number | undefined {
     const normalized = this.normalizeCategoryMetadata(category.metadata);
 
@@ -1979,6 +2097,7 @@ export class ProductService {
     metadata: Category['metadata'],
     ownerUserId?: number,
     metafields?: Array<{ key: string; label: string; type: 'text' | 'textarea' }>,
+    optionTemplates?: Array<{ name: string; values: string[] }>,
   ): Record<string, unknown> {
     const normalized = this.normalizeCategoryMetadata(metadata);
 
@@ -1990,116 +2109,91 @@ export class ProductService {
       normalized.metafields = this.normalizeCategoryMetafieldDefinitions(metafields);
     }
 
+    if (optionTemplates !== undefined) {
+      normalized.option_templates = this.normalizeCategoryOptionTemplates(optionTemplates);
+    }
+
     return normalized;
-  }
-
-  private slugToCategoryName(slug: string): string {
-    const parts = this.normalizeCategorySlug(slug)
-      .split('-')
-      .filter((part) => part.length > 0);
-
-    if (parts.length === 0) {
-      return 'New Category';
-    }
-
-    return parts.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
-  }
-
-  private inferCategoryMetafieldsFromOptions(optionNames: string[]): Array<{ key: string; label: string; type: 'text' | 'textarea' }> {
-    return this.normalizeCategoryMetafieldDefinitions(
-      optionNames.map((name) => ({
-        key: this.normalizeCategorySlug(name).replace(/-/g, '_'),
-        label: name.trim(),
-        type: 'text',
-      })),
-    );
-  }
-
-  private buildProductMetafieldsFromCategories(categories: Category[]): Array<{ key: string; value?: string }> {
-    const defs = categories.flatMap((category) => this.normalizeCategoryMetafieldDefinitions(this.normalizeCategoryMetadata(category.metadata).metafields));
-
-    const seen = new Set<string>();
-    const entries: Array<{ key: string; value?: string }> = [];
-
-    for (const def of defs) {
-      const key = String(def.key ?? '').trim();
-      if (!key) {
-        continue;
-      }
-
-      const dedupe = key.toLowerCase();
-      if (seen.has(dedupe)) {
-        continue;
-      }
-
-      seen.add(dedupe);
-      entries.push({ key, value: undefined });
-    }
-
-    return entries;
   }
 
   private async resolveImportCategoriesForStore(
     categorySlugs: string[],
-    ownerUserId: number,
-    inferredMetafields: Array<{ key: string; label: string; type: 'text' | 'textarea' }>,
+    inferredOptionTemplates: Array<{ name: string; values: string[] }>,
     logContext?: string,
   ): Promise<Category[]> {
     const uniqueSlugs = [...new Set(categorySlugs.map((slug) => this.normalizeCategorySlug(slug)).filter((slug) => slug.length > 0))];
+    if (uniqueSlugs.length === 0) {
+      return [];
+    }
+
+    const existingCategories = await this.categoryRepo.find({
+      where: { slug: In(uniqueSlugs) },
+    });
+
+    const bySlug = new Map(existingCategories.map((category) => [category.slug, category]));
+    const missing = uniqueSlugs.filter((slug) => !bySlug.has(slug));
+
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Category slug(s) not found: ${missing.join(', ')}. Categories are admin-managed and must exist before onboarding/import.`,
+      );
+    }
+
+    const normalizedIncomingTemplates = this.normalizeCategoryOptionTemplates(inferredOptionTemplates);
     const resolved: Category[] = [];
 
     for (const slug of uniqueSlugs) {
-      let category = await this.categoryRepo.findOne({ where: { slug } });
-      if (category) {
-        const existingMetafields = this.normalizeCategoryMetafieldDefinitions(this.normalizeCategoryMetadata(category.metadata).metafields);
-        const mergedMetafields = this.mergeCategoryMetafieldDefinitions(existingMetafields, inferredMetafields);
-        const previousOwnerId = this.getCategoryOwnerUserId(category);
-        const ownerId = previousOwnerId ?? ownerUserId;
+      const category = bySlug.get(slug)!;
+      const existingTemplates = this.normalizeCategoryOptionTemplates(this.normalizeCategoryMetadata(category.metadata).option_templates);
+      const mergedTemplates = this.mergeCategoryOptionTemplates(existingTemplates, normalizedIncomingTemplates);
 
-        category.metadata = this.buildCategoryMetadata(category.metadata, ownerId, mergedMetafields);
-
-        if (ownerId !== previousOwnerId || mergedMetafields.length !== existingMetafields.length) {
-          category = await this.categoryRepo.save(category);
-          this.logger.log(`${logContext ?? '[category-import]'} enriched category slug=${slug} categoryId=${category.category_id} ownerUserId=${ownerId}`);
-        }
-
-        resolved.push(category);
-        continue;
+      if (!this.areCategoryOptionTemplatesEqual(existingTemplates, mergedTemplates)) {
+        category.metadata = this.buildCategoryMetadata(category.metadata, this.getCategoryOwnerUserId(category), undefined, mergedTemplates);
+        await this.categoryRepo.save(category);
+        this.logger.log(`${logContext ?? '[category-import]'} enriched category templates slug=${slug} categoryId=${category.category_id}`);
       }
 
-      const payload = this.categoryRepo.create({
-        name: this.slugToCategoryName(slug),
-        slug,
-        parent_id: null,
-        metadata: this.buildCategoryMetadata(undefined, ownerUserId, inferredMetafields),
-      });
-
-      try {
-        category = await this.categoryRepo.save(payload);
-      } catch (error) {
-        if (error instanceof QueryFailedError && String(error.message).includes('PK_51615bef2cea22812d0dcab6e18')) {
-          await this.syncIdSequence('Category', 'category_id');
-          category = await this.categoryRepo.save(payload);
-        } else if (error instanceof QueryFailedError && String(error.message).toLowerCase().includes('duplicate key value')) {
-          const existing = await this.categoryRepo.findOne({ where: { slug } });
-          if (!existing) {
-            throw error;
-          }
-
-          const existingMetafields = this.normalizeCategoryMetafieldDefinitions(this.normalizeCategoryMetadata(existing.metadata).metafields);
-          const mergedMetafields = this.mergeCategoryMetafieldDefinitions(existingMetafields, inferredMetafields);
-          existing.metadata = this.buildCategoryMetadata(existing.metadata, this.getCategoryOwnerUserId(existing) ?? ownerUserId, mergedMetafields);
-          category = await this.categoryRepo.save(existing);
-        } else {
-          throw error;
-        }
-      }
-
-      this.logger.log(`${logContext ?? '[category-import]'} created category slug=${slug} categoryId=${category.category_id} ownerUserId=${ownerUserId}`);
       resolved.push(category);
     }
 
     return resolved;
+  }
+
+  private async enrichCategoryOptionTemplatesForProduct(
+    manager: EntityManager,
+    productId: number,
+    templates: Array<{ name: string; values: string[] }>,
+  ): Promise<void> {
+    const normalizedTemplates = this.normalizeCategoryOptionTemplates(templates);
+    if (normalizedTemplates.length === 0) {
+      return;
+    }
+
+    const product = await manager.findOne(Product, {
+      where: { product_id: productId },
+      select: { category_id: true },
+    });
+
+    const categoryId = product?.category_id ?? null;
+    if (!categoryId) {
+      return;
+    }
+
+    const categories = await manager.find(Category, {
+      where: { category_id: categoryId },
+    });
+
+    for (const category of categories) {
+      const existingTemplates = this.normalizeCategoryOptionTemplates(this.normalizeCategoryMetadata(category.metadata).option_templates);
+      const mergedTemplates = this.mergeCategoryOptionTemplates(existingTemplates, normalizedTemplates);
+
+      if (this.areCategoryOptionTemplatesEqual(existingTemplates, mergedTemplates)) {
+        continue;
+      }
+
+      category.metadata = this.buildCategoryMetadata(category.metadata, this.getCategoryOwnerUserId(category), undefined, mergedTemplates);
+      await manager.save(Category, category);
+    }
   }
 
   private normalizeCategorySlug(value: string): string {
@@ -2111,146 +2205,22 @@ export class ProductService {
   }
 
   async createCategory(input: CreateCategoryInput, actor?: User): Promise<Category> {
-    if (!actor) {
-      throw new ForbiddenException('Authentication is required');
-    }
-
-    const slug = this.normalizeCategorySlug(input.slug || input.name);
-    if (!slug) {
-      throw new BadRequestException('Category slug cannot be empty');
-    }
-
-    const existing = await this.categoryRepo.findOne({ where: { slug } });
-    if (existing) {
-      throw new ConflictException(`Category with slug "${slug}" already exists`);
-    }
-
-    if (input.parent_id != null) {
-      const parent = await this.categoryRepo.findOne({ where: { category_id: input.parent_id } });
-      if (!parent) {
-        throw new NotFoundException(`Parent category with ID ${input.parent_id} not found`);
-      }
-    }
-
-    const normalizedMetafields = this.normalizeCategoryMetafieldDefinitions(input.metafields);
-
-    const payload = this.categoryRepo.create({
-      name: input.name.trim(),
-      slug,
-      parent_id: input.parent_id ?? null,
-      metadata: this.buildCategoryMetadata(undefined, actor.id, normalizedMetafields),
-    });
-
-    try {
-      const saved = await this.categoryRepo.save(payload);
-      return this.serializeCategoryForGraphQL(saved);
-    } catch (error) {
-      // If the identity/sequence is out of sync, re-align and retry once.
-      if (error instanceof QueryFailedError && String(error.message).includes('PK_51615bef2cea22812d0dcab6e18')) {
-        await this.syncIdSequence('Category', 'category_id');
-        const saved = await this.categoryRepo.save(payload);
-        return this.serializeCategoryForGraphQL(saved);
-      }
-
-      throw error;
-    }
-  }
-
-  private async syncIdSequence(tableName: string, columnName: string): Promise<void> {
-    const maxRes = await this.dataSource.query(`SELECT COALESCE(MAX("${columnName}"), 0)::int AS max_id FROM public."${tableName}"`);
-    const maxValue = Number(maxRes[0]?.max_id || 0);
-
-    const seqRes = await this.dataSource.query(`SELECT pg_get_serial_sequence('public."${tableName}"', '${columnName}') AS seq`);
-    const seqName = seqRes[0]?.seq as string | null;
-
-    if (!seqName) {
-      return;
-    }
-
-    // `is_called = true` means next nextval() returns max + 1.
-    await this.dataSource.query('SELECT setval($1, $2, true)', [seqName, maxValue]);
+    void input;
+    this.assertAdmin(actor);
+    throw new ForbiddenException('Categories are DB-managed. API category creation is disabled.');
   }
 
   async updateCategory(id: number, input: UpdateCategoryInput, actor?: User): Promise<Category> {
-    if (!actor) {
-      throw new ForbiddenException('Authentication is required');
-    }
-
-    const category = await this.categoryRepo.findOne({ where: { category_id: id } });
-    if (!category) {
-      throw new NotFoundException(`Category with ID ${id} not found`);
-    }
-
-    const ownerId = this.getCategoryOwnerUserId(category);
-    if (ownerId && ownerId !== actor.id) {
-      throw new ForbiddenException('Only the category owner can update this category');
-    }
-
-    if (input.name !== undefined) {
-      category.name = input.name.trim();
-    }
-
-    if (input.slug !== undefined) {
-      const slug = this.normalizeCategorySlug(input.slug);
-      if (!slug) {
-        throw new BadRequestException('Category slug cannot be empty');
-      }
-
-      const duplicate = await this.categoryRepo.findOne({ where: { slug } });
-      if (duplicate && duplicate.category_id !== id) {
-        throw new ConflictException(`Category with slug "${slug}" already exists`);
-      }
-      category.slug = slug;
-    }
-
-    if (input.parent_id !== undefined) {
-      if (input.parent_id === id) {
-        throw new BadRequestException('Category cannot be its own parent');
-      }
-
-      if (input.parent_id != null) {
-        const parent = await this.categoryRepo.findOne({ where: { category_id: input.parent_id } });
-        if (!parent) {
-          throw new NotFoundException(`Parent category with ID ${input.parent_id} not found`);
-        }
-      }
-
-      category.parent_id = input.parent_id ?? null;
-    }
-
-    if (input.metafields !== undefined) {
-      const normalizedMetafields = this.normalizeCategoryMetafieldDefinitions(input.metafields);
-      category.metadata = this.buildCategoryMetadata(category.metadata, ownerId ?? actor.id, normalizedMetafields);
-    } else if (!ownerId) {
-      category.metadata = this.buildCategoryMetadata(category.metadata, actor.id);
-    }
-
-    const saved = await this.categoryRepo.save(category);
-    return this.serializeCategoryForGraphQL(saved);
+    void id;
+    void input;
+    this.assertAdmin(actor);
+    throw new ForbiddenException('Categories are DB-managed. API category updates are disabled.');
   }
 
   async deleteCategory(id: number, actor?: User): Promise<boolean> {
-    if (!actor) {
-      throw new ForbiddenException('Authentication is required');
-    }
-
-    const existing = await this.categoryRepo.findOne({ where: { category_id: id } });
-    if (!existing) {
-      return false;
-    }
-
-    const ownerId = this.getCategoryOwnerUserId(existing);
-    if (ownerId && ownerId !== actor.id) {
-      throw new ForbiddenException('Only the category owner can delete this category');
-    }
-
-    if (!ownerId) {
-      existing.metadata = this.buildCategoryMetadata(existing.metadata, actor.id);
-      await this.categoryRepo.save(existing);
-    }
-
-    await this.categoryRepo.delete({ category_id: id });
-    return true;
+    void id;
+    this.assertAdmin(actor);
+    throw new ForbiddenException('Categories are DB-managed. API category deletion is disabled.');
   }
 
   private mapBrandRow(row: Record<string, unknown>): BrandRecordResponse {
@@ -2428,6 +2398,34 @@ export class ProductService {
     return this.findStore(store.store_id, actor);
   }
 
+  private async loadCategoriesByProductIds(products: Array<Pick<Product, 'product_id' | 'category_id'>>): Promise<Map<number, Category[]>> {
+    const categoryIds = [...new Set(products.map((product) => product.category_id).filter((value): value is number => Number.isInteger(value) && value > 0))];
+    if (categoryIds.length === 0) {
+      return new Map<number, Category[]>();
+    }
+
+    const categories = await this.categoryRepo.find({
+      where: { category_id: In(categoryIds) },
+    });
+
+    const categoryById = new Map<number, Category>(categories.map((category) => [category.category_id, category]));
+    const map = new Map<number, Category[]>();
+
+    for (const product of products) {
+      const categoryId = product.category_id;
+      if (!categoryId) {
+        continue;
+      }
+
+      const category = categoryById.get(categoryId);
+      if (category) {
+        map.set(product.product_id, [category]);
+      }
+    }
+
+    return map;
+  }
+
   async findAll(
     filter: ProductFilterInput = {},
     pagination: PaginationInput = {},
@@ -2479,15 +2477,7 @@ export class ProductService {
     }
 
     if (filter.category_id) {
-      queryBuilder.andWhere(
-        `EXISTS (
-          SELECT 1
-          FROM "ProductCategory" pc
-          WHERE pc."product_id" = product."product_id"
-            AND pc."category_id" = :categoryId
-        )`,
-        { categoryId: filter.category_id },
-      );
+      queryBuilder.andWhere('product.category_id = :categoryId', { categoryId: filter.category_id });
     }
 
     if (filter.search) {
@@ -2503,49 +2493,34 @@ export class ProductService {
     const [items, total] = await queryBuilder.getManyAndCount();
 
     const productIds = items.map((item) => item.product_id);
-    const [optionsByProductId, categoryLinksByProductId] =
+    const optionsByProductId =
       productIds.length > 0
-        ? await Promise.all([
-            includeOptions
-              ? this.optionRepo
-                  .find({
-                    where: { product_id: In(productIds) },
-                    relations: { values: true },
-                    order: {
-                      position: 'ASC',
-                      values: { position: 'ASC' },
-                    },
-                  })
-                  .then((rows) =>
-                    rows.reduce<Map<number, ProductOption[]>>((acc, option) => {
-                      const list = acc.get(option.product_id) ?? [];
-                      list.push(option);
-                      acc.set(option.product_id, list);
-                      return acc;
-                    }, new Map<number, ProductOption[]>()),
-                  )
-              : Promise.resolve(new Map<number, ProductOption[]>()),
-            includeCategories
-              ? this.productCategoryRepo
-                  .find({
-                    where: { product_id: In(productIds) },
-                    relations: { category: true },
-                  })
-                  .then((rows) =>
-                    rows.reduce<Map<number, ProductCategory[]>>((acc, link) => {
-                      const list = acc.get(link.product_id) ?? [];
-                      list.push(link);
-                      acc.set(link.product_id, list);
-                      return acc;
-                    }, new Map<number, ProductCategory[]>()),
-                  )
-              : Promise.resolve(new Map<number, ProductCategory[]>()),
-          ])
-        : [new Map<number, ProductOption[]>(), new Map<number, ProductCategory[]>()];
+        ? await (includeOptions
+            ? this.optionRepo
+                .find({
+                  where: { product_id: In(productIds) },
+                  relations: { values: true },
+                  order: {
+                    position: 'ASC',
+                    values: { position: 'ASC' },
+                  },
+                })
+                .then((rows) =>
+                  rows.reduce<Map<number, ProductOption[]>>((acc, option) => {
+                    const list = acc.get(option.product_id) ?? [];
+                    list.push(option);
+                    acc.set(option.product_id, list);
+                    return acc;
+                  }, new Map<number, ProductOption[]>()),
+                )
+            : Promise.resolve(new Map<number, ProductOption[]>()))
+        : new Map<number, ProductOption[]>();
+
+    const categoriesByProductId = includeCategories ? await this.loadCategoriesByProductIds(items) : new Map<number, Category[]>();
 
     const mapped = items.map((item) => ({
       ...this.withProjectedFields(item),
-      categories: includeCategories ? (categoryLinksByProductId.get(item.product_id) ?? []).map((link) => link.category) : undefined,
+      categories: includeCategories ? categoriesByProductId.get(item.product_id) ?? [] : undefined,
       options: includeOptions
         ? (optionsByProductId.get(item.product_id) ?? []).map((option) => ({
             ...option,
@@ -2583,16 +2558,13 @@ export class ProductService {
       throw new NotFoundException(`Product with ID ${productId} not found`);
     }
 
-    const [options, categoryLinks, metafields, countryRows, variants] = await Promise.all([
+    const [options, category, metafields, countryRows, variants] = await Promise.all([
       this.optionRepo.find({
         where: { product_id: product.product_id },
         relations: { values: true },
         order: { position: 'ASC', values: { position: 'ASC' } },
       }),
-      this.productCategoryRepo.find({
-        where: { product_id: product.product_id },
-        relations: { category: true },
-      }),
+      product.category_id ? this.categoryRepo.findOne({ where: { category_id: product.category_id } }) : Promise.resolve(null),
       this.metafieldRepo.find({
         where: {
           owner_type: 'product',
@@ -2618,7 +2590,7 @@ export class ProductService {
 
     return {
       ...this.withProjectedFields(product),
-      categories: categoryLinks.map((link) => link.category),
+      categories: category ? [category] : [],
       options: options.map((option) => ({
         ...option,
         values: [...(option.values ?? [])].sort((a, b) => a.position - b.position),
@@ -2644,7 +2616,6 @@ export class ProductService {
 
   // Allowed table/column combinations for sequence sync to prevent SQL injection
   private static readonly ALLOWED_TABLE_COLUMNS: ReadonlyMap<string, readonly string[]> = new Map([
-    ['ProductCategory', ['id']],
     ['ProductOption', ['option_id']],
     ['OptionValue', ['value_id']],
   ]);
@@ -2657,7 +2628,7 @@ export class ProductService {
     }
 
     const maxRes = await manager.query(`SELECT COALESCE(MAX("${column}"), 0)::int AS max_id FROM public."${table}"`);
-    const maxValue = Number(maxRes[0]?.max_id ?? 0);
+    const nextValue = Number(maxRes[0]?.max_id ?? 0) + 1;
 
     const serialRes = await manager.query(`SELECT pg_get_serial_sequence('public."${table}"', '${column}') AS seq`);
     const serialSeq = serialRes[0]?.seq as string | null;
@@ -2697,8 +2668,7 @@ export class ProductService {
         continue;
       }
 
-      // `is_called = true` means next nextval() returns max + 1.
-      await manager.query('SELECT setval($1, $2, true)', [seqName, maxValue]);
+      await manager.query('SELECT setval($1, $2, false)', [seqName, nextValue]);
     }
   }
 
@@ -2708,6 +2678,20 @@ export class ProductService {
     const normalizedSeo = this.normalizeSeoInput(seo);
     const normalizedMetafields = this.normalizeMetafieldsInput(metafields);
     const normalizedCountryCodes = this.normalizeCountryCodes(country_codes);
+
+    const normalizedCategoryIds = [...new Set((category_ids ?? []).filter((value) => Number.isInteger(value) && value > 0))];
+    if (normalizedCategoryIds.length > 1) {
+      throw new BadRequestException('Only one category can be assigned to a product.');
+    }
+
+    let resolvedCategoryId: number | null = null;
+    if (normalizedCategoryIds.length === 1) {
+      const category = await this.categoryRepo.findOne({ where: { category_id: normalizedCategoryIds[0] } });
+      if (!category) {
+        throw new NotFoundException('Category not found');
+      }
+      resolvedCategoryId = category.category_id;
+    }
 
     const accessibleStoreIds = await this.getAccessibleStoreIds(actor);
     if (accessibleStoreIds && !accessibleStoreIds.includes(productData.store_id)) {
@@ -2732,6 +2716,7 @@ export class ProductService {
 
       const product = manager.create(Product, {
         ...productData,
+        category_id: resolvedCategoryId,
         handle: normalizedSeo?.handle,
         meta_title: normalizedSeo?.meta_title,
         meta_description: normalizedSeo?.meta_description,
@@ -2744,25 +2729,6 @@ export class ProductService {
       const savedProduct = await manager.save(Product, product);
       await this.upsertBrandRecord(manager, savedProduct.store_id, savedProduct.brand);
 
-      if (category_ids && category_ids.length > 0) {
-        const categories = await manager.find(Category, { where: { category_id: In(category_ids) } });
-        if (categories.length !== category_ids.length) {
-          throw new NotFoundException('One or more categories not found');
-        }
-
-        await this.syncTableIdSequence(manager, 'ProductCategory', 'id');
-
-        await manager.save(
-          ProductCategory,
-          category_ids.map((category_id) =>
-            manager.create(ProductCategory, {
-              product_id: savedProduct.product_id,
-              category_id,
-            }),
-          ),
-        );
-      }
-
       await this.syncProductMetafields(manager, savedProduct.product_id, normalizedMetafields);
       await this.syncProductCountryAvailability(manager, savedProduct.store_id, savedProduct.product_id, normalizedCountryCodes);
 
@@ -2770,7 +2736,7 @@ export class ProductService {
         where: { product_id: savedProduct.product_id },
         relations: {
           options: { values: true },
-          category_links: { category: true },
+          category: true,
           variants: {
             inventory_item: {
               levels: true,
@@ -2801,7 +2767,7 @@ export class ProductService {
 
       const result = {
         ...this.withProjectedFields(hydratedProduct),
-        categories: (hydratedProduct.category_links ?? []).map((link) => link.category),
+        categories: hydratedProduct.category ? [hydratedProduct.category] : [],
         options: (hydratedProduct.options ?? []).map((option) => ({
           ...option,
           values: [...(option.values ?? [])].sort((a, b) => a.position - b.position),
@@ -2810,12 +2776,10 @@ export class ProductService {
         country_codes: countryCodesForProduct.map((row) => row.country_code),
       };
 
-      this.invalidatePublicCaches();
-      void this.syncPublicProductToSearchIndex(result.handle ?? String(result.product_id)).catch((error) => {
-        console.error('Failed to sync created product ' + (result.handle ?? result.product_id) + ' to Elasticsearch:', error);
-      });
       return result;
     });
+
+    await this.refreshPublicSearchForProduct(result.product_id);
 
     return result;
   }
@@ -3028,85 +2992,6 @@ export class ProductService {
     );
   }
 
-  private buildVariantImportMetafields(
-    row: BulkImportProductsInput['rows'][number],
-    parentHandle: string,
-    option1Value: string,
-    option2Value: string | undefined,
-    option3Value: string | undefined,
-    variantMediaUrls: string[],
-    variantInventory: number | undefined,
-  ): Array<{ key: string; value: string }> {
-    const entries: Array<{ key: string; value: string }> = [];
-
-    const add = (key: string, value?: string | number): void => {
-      const normalizedValue = String(value ?? '').trim();
-      if (!normalizedValue) {
-        return;
-      }
-
-      entries.push({ key, value: normalizedValue });
-    };
-
-    add('import.parent_handle', parentHandle);
-    add('import.variant.option1_value', option1Value);
-    add('import.variant.option2_value', option2Value);
-    add('import.variant.option3_value', option3Value);
-    add('import.variant.sku', row.variant_sku);
-    add('import.variant.barcode', row.variant_barcode);
-    add('import.variant.price', row.variant_price);
-    add('import.variant.compare_at_price', row.variant_compare_at_price);
-    add('import.variant.cost_price', row.variant_cost_price);
-    add('import.variant.weight', row.variant_weight);
-    add('import.variant.weight_unit', row.variant_weight_unit);
-    add('import.variant.inventory_policy', row.variant_inventory_policy);
-    add('import.variant.inventory', variantInventory);
-    add('import.variant.media_urls', variantMediaUrls.join('|'));
-    if (row.row_number != null) {
-      add('import.variant.row_number', row.row_number);
-    }
-
-    return entries;
-  }
-
-  private async upsertOwnerMetafields(ownerType: string, ownerId: number, entries: Array<{ key: string; value: string }>): Promise<void> {
-    if (entries.length === 0) {
-      return;
-    }
-
-    const existing = await this.metafieldRepo.find({
-      where: {
-        owner_type: ownerType,
-        owner_id: ownerId,
-      },
-    });
-
-    const merged = [...existing];
-
-    for (const entry of entries) {
-      const dedupeKey = entry.key.trim().toLowerCase();
-      const existingIndex = merged.findIndex((item) => item.key.trim().toLowerCase() === dedupeKey);
-      if (existingIndex >= 0) {
-        merged[existingIndex] = {
-          ...merged[existingIndex],
-          key: entry.key,
-          value: entry.value,
-        };
-      } else {
-        merged.push(
-          this.metafieldRepo.create({
-            owner_type: ownerType,
-            owner_id: ownerId,
-            key: entry.key,
-            value: entry.value,
-          }),
-        );
-      }
-    }
-
-    await this.metafieldRepo.save(merged);
-  }
-
   async bulkImportProducts(input: BulkImportProductsInput, actor?: User): Promise<BulkImportProductsResponse> {
     if (!actor) {
       throw new ForbiddenException('Authentication is required');
@@ -3203,16 +3088,6 @@ export class ProductService {
           const variantInventory = this.parseImportOptionalInteger(row.variant_inventory, 'variant_inventory');
           const variantMediaColumnProvided = row.variant_media_urls !== undefined || row.variant_media_url !== undefined;
           const variantMediaUrls = this.normalizeImportMediaUrls(String(row.variant_media_urls ?? row.variant_media_url ?? '').trim());
-          const variantMetafields = this.buildVariantImportMetafields(
-            row,
-            parentHandle,
-            option1Value,
-            option2Value,
-            option3Value,
-            variantMediaUrls,
-            variantInventory,
-          );
-
           const existingVariant = await this.variantRepo.findOne({
             where: {
               product_id: parentProduct.product_id,
@@ -3237,8 +3112,6 @@ export class ProductService {
             });
 
             await this.upsertVariantInventoryLevel(updatedVariant.inventory_item_id, primaryInventoryLocationId, variantInventory);
-
-            await this.upsertOwnerMetafields('variant', updatedVariant.variant_id, variantMetafields);
 
             this.logger.log(`[bulk-import:${importRunId}] row=${rowNumber} updated variantId=${existingVariant.variant_id} parentHandle=${parentHandle}`);
 
@@ -3271,8 +3144,6 @@ export class ProductService {
 
           await this.upsertVariantInventoryLevel(createdVariant.inventory_item_id, primaryInventoryLocationId, variantInventory);
 
-          await this.upsertOwnerMetafields('variant', createdVariant.variant_id, variantMetafields);
-
           this.logger.log(`[bulk-import:${importRunId}] row=${rowNumber} created variantId=${createdVariant.variant_id} parentHandle=${parentHandle}`);
 
           results.push({
@@ -3295,6 +3166,10 @@ export class ProductService {
 
         if (categorySlugs.length === 0) {
           throw new BadRequestException("Column 'category_slugs' must include at least one category slug.");
+        }
+
+        if (categorySlugs.length > 1) {
+          throw new BadRequestException("Column 'category_slugs' supports exactly one category slug per product.");
         }
 
         if (option1Values.length === 0) {
@@ -3336,14 +3211,12 @@ export class ProductService {
         const uniqueCategorySlugs = [...new Set(categorySlugs)];
         const categories = await this.resolveImportCategoriesForStore(
           uniqueCategorySlugs,
-          actor.id,
-          this.inferCategoryMetafieldsFromOptions(optionGroups.map((group) => group.name)),
+          optionGroups,
           `[bulk-import:${importRunId}]`,
         );
 
         const countryCodes = this.normalizeCountryCodes(this.splitImportList(row.country_codes));
         const mediaUrls = this.normalizeImportMediaUrls(String(row.media_urls ?? row.media_url ?? '').trim());
-        const importMetafields = this.buildProductMetafieldsFromCategories(categories);
         const existingProduct = await this.productRepo.findOne({
           where: { handle },
           relations: {
@@ -3356,32 +3229,6 @@ export class ProductService {
             throw new ConflictException(`Handle '${handle}' already exists in another store.`);
           }
 
-          const existingMetafields = await this.metafieldRepo.find({
-            where: {
-              owner_type: 'product',
-              owner_id: existingProduct.product_id,
-            },
-          });
-
-          const mergedMetafields = [...existingMetafields.map((entry) => ({ key: entry.key, value: entry.value })), ...importMetafields].reduce<
-            Array<{ key: string; value?: string }>
-          >((acc, current) => {
-            const key = current.key.trim();
-            if (!key) {
-              return acc;
-            }
-
-            const dedupeKey = key.toLowerCase();
-            const existingIndex = acc.findIndex((entry) => entry.key.trim().toLowerCase() === dedupeKey);
-            if (existingIndex >= 0) {
-              acc[existingIndex] = { key, value: current.value };
-              return acc;
-            }
-
-            acc.push({ key, value: current.value });
-            return acc;
-          }, []);
-
           const updated = await this.update(
             {
               product_id: existingProduct.product_id,
@@ -3389,13 +3236,12 @@ export class ProductService {
               description: String(row.description ?? '').trim() || undefined,
               brand: String(row.brand ?? '').trim() || undefined,
               status: ProductStatus.DRAFT,
-              category_ids: categories.map((category) => category.category_id),
+              category_ids: categories.length > 0 ? [categories[0].category_id] : undefined,
               primary_image_url: mediaUrls[0],
               media_urls: mediaUrls.length > 0 ? mediaUrls : undefined,
               seo: {
                 handle,
               },
-              metafields: mergedMetafields,
               country_codes: countryCodes.length > 0 ? countryCodes : undefined,
             },
             actor,
@@ -3442,13 +3288,12 @@ export class ProductService {
             brand: String(row.brand ?? '').trim() || undefined,
             status: ProductStatus.DRAFT,
             store_id: store.store_id,
-            category_ids: categories.map((category) => category.category_id),
+            category_ids: categories.length > 0 ? [categories[0].category_id] : undefined,
             primary_image_url: mediaUrls[0],
             media_urls: mediaUrls.length > 0 ? mediaUrls : undefined,
             seo: {
               handle,
             },
-            metafields: importMetafields.length > 0 ? importMetafields : undefined,
             country_codes: countryCodes.length > 0 ? countryCodes : undefined,
           },
           actor,
@@ -3527,6 +3372,27 @@ export class ProductService {
     const normalizedMetafields = this.normalizeMetafieldsInput(metafields);
     const normalizedCountryCodes = this.normalizeCountryCodes(country_codes);
 
+    const normalizedCategoryIds = category_ids
+      ? [...new Set(category_ids.filter((value) => Number.isInteger(value) && value > 0))]
+      : undefined;
+
+    if (normalizedCategoryIds && normalizedCategoryIds.length > 1) {
+      throw new BadRequestException('Only one category can be assigned to a product.');
+    }
+
+    let resolvedCategoryId: number | null | undefined = undefined;
+    if (normalizedCategoryIds !== undefined) {
+      if (normalizedCategoryIds.length === 1) {
+        const category = await this.categoryRepo.findOne({ where: { category_id: normalizedCategoryIds[0] } });
+        if (!category) {
+          throw new NotFoundException('Category not found');
+        }
+        resolvedCategoryId = category.category_id;
+      } else {
+        resolvedCategoryId = null;
+      }
+    }
+
     const existingProduct = await this.findOne(product_id, actor);
 
     const result = await this.dataSource.transaction(async (manager) => {
@@ -3549,6 +3415,7 @@ export class ProductService {
         },
         {
           ...productData,
+          ...(resolvedCategoryId !== undefined ? { category_id: resolvedCategoryId } : {}),
           ...(normalizedSeo
             ? {
                 handle: normalizedSeo.handle,
@@ -3562,29 +3429,6 @@ export class ProductService {
         },
       );
 
-      if (category_ids !== undefined) {
-        await manager.delete(ProductCategory, { product_id });
-
-        if (category_ids.length > 0) {
-          const categories = await manager.find(Category, { where: { category_id: In(category_ids) } });
-          if (categories.length !== category_ids.length) {
-            throw new NotFoundException('One or more categories not found');
-          }
-
-          await this.syncTableIdSequence(manager, 'ProductCategory', 'id');
-
-          await manager.save(
-            ProductCategory,
-            category_ids.map((category_id) =>
-              manager.create(ProductCategory, {
-                product_id,
-                category_id,
-              }),
-            ),
-          );
-        }
-      }
-
       await this.syncProductMetafields(manager, product_id, normalizedMetafields);
       await this.syncProductCountryAvailability(manager, existingProduct.store_id, product_id, normalizedCountryCodes);
 
@@ -3592,7 +3436,7 @@ export class ProductService {
         where: { product_id },
         relations: {
           options: { values: true },
-          category_links: { category: true },
+          category: true,
           variants: {
             inventory_item: {
               levels: true,
@@ -3624,7 +3468,7 @@ export class ProductService {
 
       const result = {
         ...this.withProjectedFields(product),
-        categories: (product.category_links ?? []).map((link) => link.category),
+        categories: product.category ? [product.category] : [],
         options: (product.options ?? []).map((option) => ({
           ...option,
           values: [...(option.values ?? [])].sort((a, b) => a.position - b.position),
@@ -3633,19 +3477,14 @@ export class ProductService {
         country_codes: countryCodesForProduct.map((row) => row.country_code),
       };
 
-      this.invalidatePublicCaches();
-
-      if (existingProduct.handle && existingProduct.handle !== result.handle) {
-        void this.deletePublicProductFromSearchIndexByHandle(existingProduct.handle).catch((error) => {
-          console.error('Failed to delete stale product handle ' + existingProduct.handle + ' from Elasticsearch:', error);
-        });
-      }
-
-      void this.syncPublicProductToSearchIndex(result.handle ?? String(result.product_id)).catch((error) => {
-        console.error('Failed to sync updated product ' + (result.handle ?? result.product_id) + ' to Elasticsearch:', error);
-      });
       return result;
     });
+
+    if (existingProduct.handle && existingProduct.handle !== result.handle) {
+      await this.deletePublicProductFromSearchIndexByHandle(existingProduct.handle);
+    }
+
+    await this.refreshPublicSearchForProduct(result.product_id);
 
     return result;
   }
@@ -3656,13 +3495,9 @@ export class ProductService {
     this.invalidatePublicCaches();
 
     if (product.handle) {
-      void this.deletePublicProductFromSearchIndexByHandle(product.handle).catch((error) => {
-        console.error('Failed to delete product ' + product.handle + ' from Elasticsearch:', error);
-      });
+      await this.deletePublicProductFromSearchIndexByHandle(product.handle);
     } else {
-      void this.deletePublicProductFromSearchIndexByProductId(productId).catch((error) => {
-        console.error('Failed to delete product ' + productId + ' from Elasticsearch:', error);
-      });
+      await this.deletePublicProductFromSearchIndexByProductId(productId);
     }
 
     return true;
@@ -3671,6 +3506,16 @@ export class ProductService {
   async addOption(input: AddProductOptionInput, actor?: User): Promise<ProductOption> {
     const { product_id, name, values, position } = input;
     const product = await this.findOne(product_id, actor);
+    const normalizedOptionName = name.trim();
+    const normalizedOptionValues = [...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))];
+
+    if (!normalizedOptionName) {
+      throw new BadRequestException('Option name cannot be empty');
+    }
+
+    if (normalizedOptionValues.length === 0) {
+      throw new BadRequestException('Option must include at least one value');
+    }
 
     const optionCount = await this.optionRepo.count({ where: { product_id } });
     if (optionCount >= MAX_OPTIONS_PER_PRODUCT) {
@@ -3693,14 +3538,14 @@ export class ProductService {
         ProductOption,
         manager.create(ProductOption, {
           product_id,
-          name,
+          name: normalizedOptionName,
           position: optionPosition,
         }),
       );
 
       await this.syncTableIdSequence(manager, 'OptionValue', 'value_id');
 
-      const optionValues = values.map((value, idx) =>
+      const optionValues = normalizedOptionValues.map((value, idx) =>
         manager.create(OptionValue, {
           option_id: option.option_id,
           value,
@@ -3710,16 +3555,15 @@ export class ProductService {
 
       await manager.save(OptionValue, optionValues);
 
+      await this.enrichCategoryOptionTemplatesForProduct(manager, product_id, [{ name: normalizedOptionName, values: normalizedOptionValues }]);
+
       return manager.findOneOrFail(ProductOption, {
         where: { option_id: option.option_id },
         relations: { values: true },
       });
     });
 
-    this.invalidatePublicCaches();
-    void this.syncPublicProductToSearchIndex(product.handle ?? String(product.product_id)).catch((error) => {
-      console.error('Failed to sync product ' + (product.handle ?? product.product_id) + ' after adding option to Elasticsearch:', error);
-    });
+    await this.refreshPublicSearchForProduct(product.product_id);
 
     return result;
   }
@@ -3734,10 +3578,7 @@ export class ProductService {
 
     await this.optionRepo.delete({ option_id: optionId });
 
-    this.invalidatePublicCaches();
-    void this.syncPublicProductToSearchIndex(product.handle ?? String(product.product_id)).catch((error) => {
-      console.error('Failed to sync product ' + (product.handle ?? product.product_id) + ' after removing option from Elasticsearch:', error);
-    });
+    await this.refreshPublicSearchForProduct(product.product_id);
 
     return true;
   }
@@ -3757,12 +3598,8 @@ export class ProductService {
       },
     );
 
-    this.invalidatePublicCaches();
-
     const result = await this.findOne(productId, actor);
-    void this.syncPublicProductToSearchIndex(result.handle ?? String(result.product_id)).catch((error) => {
-      console.error('Failed to sync published product ' + (result.handle ?? result.product_id) + ' to Elasticsearch:', error);
-    });
+    await this.refreshPublicSearchForProduct(result.product_id);
 
     return result;
   }
@@ -3777,12 +3614,8 @@ export class ProductService {
       },
     );
 
-    this.invalidatePublicCaches();
-
     const result = await this.findOne(productId, actor);
-    void this.syncPublicProductToSearchIndex(result.handle ?? String(result.product_id)).catch((error) => {
-      console.error('Failed to sync archived product ' + (result.handle ?? result.product_id) + ' to Elasticsearch:', error);
-    });
+    await this.refreshPublicSearchForProduct(result.product_id);
 
     return result;
   }
@@ -3803,10 +3636,12 @@ export class ProductService {
   }
 
   private normalizeCreateInput(input: CreateProductInput): CreateProductInput {
+    const normalizedCategoryIds = input.category_ids ?? input.categoryIds ?? (input.category_id != null ? [input.category_id] : input.categoryId != null ? [input.categoryId] : undefined);
+
     return {
       ...input,
       store_id: input.store_id ?? input.storeId,
-      category_ids: input.category_ids ?? input.categoryIds,
+      category_ids: normalizedCategoryIds,
       primary_image_url: input.primary_image_url ?? input.primaryImageUrl,
       media_urls: input.media_urls ?? input.mediaUrls,
       country_codes: input.country_codes ?? input.countryCodes,
@@ -3816,10 +3651,12 @@ export class ProductService {
   }
 
   private normalizeUpdateInput(input: UpdateProductInput): UpdateProductInput {
+    const normalizedCategoryIds = input.category_ids ?? input.categoryIds ?? (input.category_id != null ? [input.category_id] : input.categoryId != null ? [input.categoryId] : undefined);
+
     return {
       ...input,
       product_id: input.product_id ?? input.productId,
-      category_ids: input.category_ids ?? input.categoryIds,
+      category_ids: normalizedCategoryIds,
       primary_image_url: input.primary_image_url ?? input.primaryImageUrl,
       media_urls: input.media_urls ?? input.mediaUrls,
       country_codes: input.country_codes ?? input.countryCodes,

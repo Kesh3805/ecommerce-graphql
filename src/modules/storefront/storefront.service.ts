@@ -295,7 +295,7 @@ export class StorefrontService {
     const categories = await Promise.all(
       links.map(async (l) => {
         // Get product count
-        const count = await this.dataSource.getRepository('ProductCategory').count({ where: { category_id: l.category_id } });
+        const count = await this.dataSource.getRepository('Product').count({ where: { category_id: l.category_id } });
 
         return {
           category_id: l.category_id,

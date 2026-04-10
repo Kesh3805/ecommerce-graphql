@@ -132,10 +132,20 @@ export class CreateProductInput {
   @IsArray()
   category_ids?: number[];
 
+  @Field(() => Int, { nullable: true })
+  @IsOptional()
+  @IsInt()
+  category_id?: number;
+
   @Field(() => [Int], { nullable: true })
   @IsOptional()
   @IsArray()
   categoryIds?: number[];
+
+  @Field(() => Int, { nullable: true })
+  @IsOptional()
+  @IsInt()
+  categoryId?: number;
 
   @Field(() => ProductStatus, { nullable: true })
   @IsOptional()
@@ -231,10 +241,20 @@ export class UpdateProductInput {
   @IsArray()
   category_ids?: number[];
 
+  @Field(() => Int, { nullable: true })
+  @IsOptional()
+  @IsInt()
+  category_id?: number;
+
   @Field(() => [Int], { nullable: true })
   @IsOptional()
   @IsArray()
   categoryIds?: number[];
+
+  @Field(() => Int, { nullable: true })
+  @IsOptional()
+  @IsInt()
+  categoryId?: number;
 
   @Field(() => GraphQLISODateTime, { nullable: true })
   @IsOptional()

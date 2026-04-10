@@ -3,16 +3,17 @@
  * (c) 2025
  */
 
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { VariantService } from './variant.service';
 import { VariantResolver } from './variant.resolver';
 import { Variant } from './entities';
+import { CatalogModule } from '../catalog/catalog.module';
 import { Product, ProductOption } from '../catalog/entities';
 import { InventoryItemEntity, InventoryLevelEntity } from '../inventory/entities';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Variant, Product, ProductOption, InventoryItemEntity, InventoryLevelEntity])],
+  imports: [forwardRef(() => CatalogModule), TypeOrmModule.forFeature([Variant, Product, ProductOption, InventoryItemEntity, InventoryLevelEntity])],
   providers: [VariantService, VariantResolver],
   exports: [VariantService],
 })

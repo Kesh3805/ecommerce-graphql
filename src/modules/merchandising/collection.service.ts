@@ -8,7 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Client } from '@elastic/elasticsearch';
 import { Repository, In, DataSource } from 'typeorm';
 import { Collection, CollectionProduct, CollectionRule, CollectionType, RuleOperator, RuleValueType } from './entities';
-import { Product, ProductCategory, ProductCountryAvailability } from '../catalog/entities';
+import { Product, ProductCountryAvailability } from '../catalog/entities';
 import { Variant } from '../variant/entities';
 import { ProductStatus, InventoryPolicy } from '../../common/enums/ecommerce.enums';
 import { CreateCollectionInput, UpdateCollectionInput, CollectionRuleInput, CollectionFilterInput } from './dto';
@@ -86,8 +86,6 @@ export class CollectionService {
     private productRepo: Repository<Product>,
     @InjectRepository(Variant)
     private variantRepo: Repository<Variant>,
-    @InjectRepository(ProductCategory)
-    private productCategoryRepo: Repository<ProductCategory>,
     @InjectRepository(ProductCountryAvailability)
     private productCountryAvailabilityRepo: Repository<ProductCountryAvailability>,
     private dataSource: DataSource,
@@ -322,7 +320,7 @@ export class CollectionService {
   private mapProjectedProducts(products: Product[]): Product[] {
     return products.map((product) => {
       const projected = this.withProjectedProductFields(product);
-      projected.categories = (projected.category_links || []).map((categoryLink) => categoryLink.category);
+      projected.categories = projected.category ? [projected.category] : [];
       return projected;
     });
   }
@@ -563,14 +561,15 @@ export class CollectionService {
       store: undefined,
       seo: undefined,
       options,
-      category_links: [],
+      category: undefined,
+      category_id: undefined,
       categories: [],
       variants,
       media: [],
       metafields: [],
       country_availability: [],
       country_codes: source.country_codes ?? [],
-    } as Product);
+    } as unknown as Product);
   }
 
   private isSearchDocumentAllowedForCountry(documentCountryCodes: string[] | undefined, countryCode?: string): boolean {
@@ -942,15 +941,8 @@ export class CollectionService {
       return inFlight;
     }
 
-    const pending = this.loadCollectionsFromSearchIndex(filter)
-      .then(async (esCollections) => {
-        if (esCollections && esCollections.length > 0) {
-          this.setCachedCollections(cacheKey, esCollections);
-          return esCollections;
-        }
-
-        // Fallback to DB if ES doesn't have collections
-        const collections = await this.loadCollections(filter);
+    const pending = this.loadCollections(filter)
+      .then(async (collections) => {
         this.setCachedCollections(cacheKey, collections);
         return collections;
       })
@@ -980,6 +972,15 @@ export class CollectionService {
     return query.getMany();
   }
 
+  private async attachCollectionRules(collection: Collection): Promise<Collection> {
+    const rules = await this.collectionRuleRepo.find({
+      where: { collection_id: collection.collection_id },
+      order: { rule_group: 'ASC', rule_id: 'ASC' },
+    });
+
+    collection.rules = rules;
+    return collection;
+  }
   // ============================================
   // MANUAL COLLECTION PRODUCTS
   // ============================================
@@ -1181,7 +1182,7 @@ export class CollectionService {
 
     const products = await this.productRepo.find({
       where: { product_id: In(pagedProductIds) },
-      relations: ['variants', 'options', 'options.values', 'category_links', 'category_links.category'],
+      relations: ['variants', 'options', 'options.values', 'category'],
     });
 
     const productById = new Map<number, Product>(products.map((product) => [product.product_id, product]));
@@ -1237,7 +1238,7 @@ export class CollectionService {
 
     const products = await this.productRepo.find({
       where: { product_id: In(pagedProductIds) },
-      relations: ['variants', 'options', 'options.values', 'category_links', 'category_links.category'],
+      relations: ['variants', 'options', 'options.values', 'category'],
       order: {
         published_at: 'DESC',
         created_at: 'DESC',
@@ -1289,7 +1290,6 @@ export class CollectionService {
     const query = this.productRepo
       .createQueryBuilder('p')
       .leftJoin('p.variants', 'v')
-      .leftJoin('p.category_links', 'pc')
       .where('p.store_id = :storeId', { storeId })
       .select('DISTINCT p.product_id', 'product_id');
 
@@ -1319,7 +1319,7 @@ export class CollectionService {
         column = 'p.brand';
         break;
       case 'category':
-        column = 'pc.category_id';
+        column = 'p.category_id';
         break;
       case 'status':
         column = 'p.status';
@@ -1414,3 +1414,8 @@ export class CollectionService {
     }
   }
 }
+
+
+
+
+

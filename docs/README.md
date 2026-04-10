@@ -27,6 +27,30 @@ Latest performance optimizations, benchmarks, and troubleshooting guide. Read th
 
 ---
 
+### **[BACKEND_LEGACY_COMPARISON_AND_ONBOARDING.md](./BACKEND_LEGACY_COMPARISON_AND_ONBOARDING.md)** 🧭
+Deep comparison between legacy backend + production dump and the current backend, with a detailed product onboarding flow and table-level write matrix.
+
+**Contents**:
+- Legacy vs current backend architecture (DB-wise and performance-wise)
+- Schema and query-pattern comparison with migration-oriented mapping
+- Exact current onboarding mutation flow and tables used per step
+- Consistency guarantees, known gaps, and recommended next improvements
+- SQL verification checklist for onboarding data integrity
+
+---
+
+### **[NEON_DB_PRODUCT_ONBOARDING_AND_TABLE_DETAILS.md](./NEON_DB_PRODUCT_ONBOARDING_AND_TABLE_DETAILS.md)** 🗃️
+Neon/PostgreSQL-focused database reference for product onboarding, metafields behavior, and complete current table inventory.
+
+**Contents**:
+- Whether `Metafield` is connected and how it is used in service layer
+- New-product onboarding insert/update table matrix (step-by-step)
+- Bulk import table write behavior
+- Full TypeORM table inventory across modules (catalog, inventory, cart, order, storefront, user)
+- SQL checks for metafield linkage and onboarding validation
+
+---
+
 ## Quick Reference
 
 ### Performance Expectations

@@ -315,7 +315,9 @@ input CreateOrderInput {
 """Input for creating a new product"""
 input CreateProductInput {
   brand: String
+  categoryId: Int
   categoryIds: [Int!]
+  category_id: Int
   category_ids: [Int!]
   countryCodes: [String!]
   country_codes: [String!]
@@ -706,6 +708,7 @@ type Product {
   best_selling_score: Float!
   brand: String
   categories: [Category!]
+  category_id: Int
   copurchased_product_ids: [Int!]
   country_codes: [String!]
   created_at: DateTime!
@@ -1084,7 +1087,9 @@ input UpdateLocationInput {
 """Input for updating a product"""
 input UpdateProductInput {
   brand: String
+  categoryId: Int
   categoryIds: [Int!]
+  category_id: Int
   category_ids: [Int!]
   countryCodes: [String!]
   country_codes: [String!]

@@ -95,8 +95,8 @@ export class Category {
   @OneToMany(() => Category, (category) => category.parent)
   children?: Relation<Category[]>;
 
-  @OneToMany(() => ProductCategory, (pc) => pc.category)
-  product_links?: Relation<ProductCategory[]>;
+  @OneToMany(() => Product, (product) => product.category)
+  products?: Relation<Product[]>;
 }
 
 @ObjectType({ description: 'Product SEO metadata' })
@@ -326,9 +326,17 @@ export class Product {
   @Column({ type: 'int' })
   store_id: number;
 
+  @Field(() => Int, { nullable: true })
+  @Column({ type: 'int', nullable: true })
+  category_id?: number | null;
+
   @ManyToOne(() => Store, (store) => store.products, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'store_id' })
   store: Relation<Store>;
+
+  @ManyToOne(() => Category, (category) => category.products, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'category_id' })
+  category?: Relation<Category>;
 
   @Field(() => ProductSEO, { nullable: true })
   seo?: ProductSEO;
@@ -336,9 +344,6 @@ export class Product {
   @Field(() => [ProductOption], { nullable: true })
   @OneToMany(() => ProductOption, (option) => option.product, { cascade: true })
   options?: Relation<ProductOption[]>;
-
-  @OneToMany(() => ProductCategory, (pc) => pc.product, { cascade: true })
-  category_links?: Relation<ProductCategory[]>;
 
   @Field(() => [Category], { nullable: true })
   categories?: Category[];
@@ -414,24 +419,3 @@ export class OptionValue {
   option: Relation<ProductOption>;
 }
 
-@Entity('ProductCategory')
-@Index(['product_id', 'category_id'], { unique: true })
-@Index(['category_id'])
-export class ProductCategory {
-  @PrimaryGeneratedColumn({ name: 'id' })
-  id: number;
-
-  @Column({ type: 'int' })
-  product_id: number;
-
-  @Column({ type: 'int' })
-  category_id: number;
-
-  @ManyToOne(() => Product, (product) => product.category_links, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'product_id' })
-  product: Relation<Product>;
-
-  @ManyToOne(() => Category, (category) => category.product_links, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'category_id' })
-  category: Relation<Category>;
-}

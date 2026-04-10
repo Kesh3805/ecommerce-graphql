@@ -1,8 +1,9 @@
-import { ConflictException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { ConflictException, forwardRef, Inject, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, QueryFailedError, Repository } from 'typeorm';
 import { InventoryPolicy } from '../../common/enums/ecommerce.enums';
 import { Product, ProductOption } from '../catalog/entities';
+import { ProductService } from '../catalog/product.service';
 import { InventoryItem, InventoryLevelEntity } from '../inventory/entities/inventory.entity';
 import { GenerateVariantsInput, UpdateVariantInput, CreateVariantInput, BulkUpdateVariantPricesInput } from './dto';
 import { BulkUpdateResponse, GenerateVariantsResponse } from './dto/variant.response';
@@ -21,6 +22,7 @@ export class VariantService implements OnModuleInit {
 
   constructor(
     private readonly dataSource: DataSource,
+    @Inject(forwardRef(() => ProductService)) private readonly productService: ProductService,
     @InjectRepository(Variant) private readonly variantRepo: Repository<Variant>,
     @InjectRepository(Product) private readonly productRepo: Repository<Product>,
     @InjectRepository(ProductOption) private readonly optionRepo: Repository<ProductOption>,
@@ -48,6 +50,70 @@ export class VariantService implements OnModuleInit {
 
     const normalized = [...new Set(mediaUrls.map((url) => String(url ?? '').trim()).filter((url) => /^https?:\/\//i.test(url)))];
     return normalized.length > 0 ? normalized : null;
+  }
+
+  private normalizeSku(sku?: string | null): string | undefined {
+    const normalized = String(sku ?? '').trim();
+    return normalized.length > 0 ? normalized : undefined;
+  }
+
+  private isInventorySkuConstraintError(error: unknown): boolean {
+    if (!(error instanceof QueryFailedError)) {
+      return false;
+    }
+
+    const constraint = String((error as QueryFailedError & { constraint?: string }).constraint ?? '');
+    const message = String((error as Error).message ?? '');
+    return constraint === 'IDX_9642bb82085eb907964f246fb8' || message.includes('IDX_9642bb82085eb907964f246fb8');
+  }
+
+  private throwInventorySkuConflict(sku?: string): never {
+    const suffix = sku ? ` '${sku}'` : '';
+    throw new ConflictException(`SKU${suffix} already exists in inventory`);
+  }
+
+  private async assertSkuAvailable(
+    manager: EntityManager,
+    sku: string | undefined,
+    options?: { excludeVariantId?: number; excludeInventoryItemId?: number },
+  ): Promise<void> {
+    if (!sku) {
+      return;
+    }
+
+    const existingVariant = await manager
+      .createQueryBuilder(Variant, 'variant')
+      .where('variant.sku = :sku', { sku })
+      .andWhere(options?.excludeVariantId ? 'variant.variant_id != :variantId' : '1=1', {
+        variantId: options?.excludeVariantId,
+      })
+      .getOne();
+
+    if (existingVariant) {
+      throw new ConflictException(`SKU '${sku}' already exists`);
+    }
+
+    const existingInventoryItem = await manager
+      .createQueryBuilder(InventoryItem, 'inventoryItem')
+      .where('inventoryItem.sku = :sku', { sku })
+      .andWhere(options?.excludeInventoryItemId ? 'inventoryItem.inventory_item_id != :inventoryItemId' : '1=1', {
+        inventoryItemId: options?.excludeInventoryItemId,
+      })
+      .getOne();
+
+    if (existingInventoryItem) {
+      this.throwInventorySkuConflict(sku);
+    }
+  }
+
+  private async syncProductSearch(productId: number): Promise<void> {
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return;
+    }
+
+    await this.productService.refreshPublicSearchForProduct(productId).catch((error) => {
+      this.logger.error(`Failed to refresh search index for product ${productId}`, error as Error);
+    });
   }
 
   async findByProductId(productId: number): Promise<Variant[]> {
@@ -123,8 +189,9 @@ export class VariantService implements OnModuleInit {
   }
 
   async create(input: CreateVariantInput): Promise<Variant> {
-    const { product_id, create_inventory, media_urls, ...variantData } = input;
+    const { product_id, create_inventory, media_urls, sku: rawSku, ...variantData } = input;
     const normalizedMediaUrls = this.normalizeMediaUrls(media_urls);
+    const normalizedSku = this.normalizeSku(rawSku);
 
     await this.ensureVariantMediaUrlsColumn();
 
@@ -133,25 +200,28 @@ export class VariantService implements OnModuleInit {
       throw new NotFoundException(`Product with ID ${product_id} not found`);
     }
 
-    if (variantData.sku) {
-      const existing = await this.variantRepo.findOne({ where: { sku: variantData.sku } });
-      if (existing) {
-        throw new ConflictException(`SKU '${variantData.sku}' already exists`);
-      }
-    }
+    const createdVariant = await this.dataSource.transaction(async (manager) => {
+      await this.assertSkuAvailable(manager, normalizedSku);
 
-    return this.dataSource.transaction(async (manager) => {
       let inventoryItemId: number | undefined;
 
       if (create_inventory) {
         await this.syncTableIdSequence(manager, 'InventoryItem', 'inventory_item_id');
-        const item = await manager.save(
-          InventoryItem,
-          manager.create(InventoryItem, {
-            sku: variantData.sku,
-            tracked: true,
-          }),
-        );
+        let item: InventoryItem;
+        try {
+          item = await manager.save(
+            InventoryItem,
+            manager.create(InventoryItem, {
+              sku: normalizedSku,
+              tracked: true,
+            }),
+          );
+        } catch (error) {
+          if (this.isInventorySkuConstraintError(error)) {
+            this.throwInventorySkuConflict(normalizedSku);
+          }
+          throw error;
+        }
         inventoryItemId = item.inventory_item_id;
       }
 
@@ -162,6 +232,7 @@ export class VariantService implements OnModuleInit {
         manager.create(Variant, {
           product_id,
           ...variantData,
+          sku: normalizedSku,
           media_urls: normalizedMediaUrls ?? undefined,
           inventory_policy: variantData.inventory_policy ?? InventoryPolicy.DENY,
           inventory_item_id: inventoryItemId,
@@ -176,28 +247,28 @@ export class VariantService implements OnModuleInit {
 
       return this.mapVariantWithTitle(hydratedVariant);
     });
+
+    await this.syncProductSearch(product_id);
+    return createdVariant;
   }
 
   async update(input: UpdateVariantInput): Promise<Variant> {
     const { variant_id, media_urls, ...updateData } = input;
     const normalizedMediaUrls = media_urls === undefined ? undefined : this.normalizeMediaUrls(media_urls);
+    const hasSkuUpdate = Object.prototype.hasOwnProperty.call(updateData, 'sku');
+    const normalizedSku = hasSkuUpdate ? this.normalizeSku(updateData.sku) : undefined;
 
     await this.ensureVariantMediaUrlsColumn();
     const variant = await this.findOne(variant_id);
 
-    if (updateData.sku) {
-      const existing = await this.variantRepo
-        .createQueryBuilder('variant')
-        .where('variant.sku = :sku', { sku: updateData.sku })
-        .andWhere('variant.variant_id != :variantId', { variantId: variant_id })
-        .getOne();
-
-      if (existing) {
-        throw new ConflictException(`SKU '${updateData.sku}' already exists`);
+    const updatedVariant = await this.dataSource.transaction(async (manager) => {
+      if (hasSkuUpdate) {
+        await this.assertSkuAvailable(manager, normalizedSku, {
+          excludeVariantId: variant_id,
+          excludeInventoryItemId: variant.inventory_item_id,
+        });
       }
-    }
 
-    return this.dataSource.transaction(async (manager) => {
       if (updateData.is_default) {
         await manager.update(
           Variant,
@@ -215,9 +286,22 @@ export class VariantService implements OnModuleInit {
         },
         {
           ...updateData,
+          ...(hasSkuUpdate ? { sku: normalizedSku ?? null } : {}),
           ...(normalizedMediaUrls !== undefined ? { media_urls: normalizedMediaUrls } : {}),
         },
       );
+
+      if (hasSkuUpdate && variant.inventory_item_id) {
+        try {
+          await manager.update(InventoryItem, { inventory_item_id: variant.inventory_item_id }, { sku: normalizedSku ?? null });
+        } catch (error) {
+          if (this.isInventorySkuConstraintError(error)) {
+            this.throwInventorySkuConflict(normalizedSku);
+          }
+          throw error;
+        }
+      }
+
       const hydratedVariant = await manager.findOneOrFail(Variant, {
         where: { variant_id },
         relations: { inventory_item: { levels: true }, product: true },
@@ -225,11 +309,14 @@ export class VariantService implements OnModuleInit {
 
       return this.mapVariantWithTitle(hydratedVariant);
     });
+
+    await this.syncProductSearch(variant.product_id);
+    return updatedVariant;
   }
 
   async delete(variantId: number): Promise<boolean> {
-    await this.dataSource.transaction(async (manager) => {
-      const deletedRows = await manager.query('DELETE FROM "Variant" WHERE "variant_id" = $1 RETURNING "inventory_item_id"', [variantId]);
+    const productId = await this.dataSource.transaction(async (manager) => {
+      const deletedRows = await manager.query('DELETE FROM "Variant" WHERE "variant_id" = $1 RETURNING "inventory_item_id", "product_id"', [variantId]);
       if (!Array.isArray(deletedRows) || deletedRows.length === 0) {
         throw new NotFoundException(`Variant with ID ${variantId} not found`);
       }
@@ -238,7 +325,14 @@ export class VariantService implements OnModuleInit {
       if (Number.isInteger(inventoryItemId) && inventoryItemId > 0) {
         await manager.delete(InventoryItem, { inventory_item_id: inventoryItemId });
       }
+
+      const deletedProductId = Number(deletedRows[0]?.product_id);
+      return Number.isInteger(deletedProductId) && deletedProductId > 0 ? deletedProductId : 0;
     });
+
+    if (productId > 0) {
+      await this.syncProductSearch(productId);
+    }
 
     return true;
   }
@@ -272,7 +366,7 @@ export class VariantService implements OnModuleInit {
     const combinations = this.cartesianProduct(options as OptionWithValues[]);
     const dedupedCombinations = Array.from(new Set(combinations.map((combo) => combo.join('||')))).map((encoded) => encoded.split('||'));
 
-    return this.dataSource.transaction(async (manager) => {
+    const generated = await this.dataSource.transaction(async (manager) => {
       const createdVariantIds: number[] = [];
 
       await this.syncTableIdSequence(manager, 'Variant', 'variant_id');
@@ -284,17 +378,27 @@ export class VariantService implements OnModuleInit {
       for (let index = 0; index < dedupedCombinations.length; index += 1) {
         const combo = dedupedCombinations[index];
         const skuSuffix = combo.map((v) => v.replace(/\s+/g, '-').toUpperCase()).join('-');
-        const sku = sku_prefix ? `${sku_prefix}-${skuSuffix}` : skuSuffix;
+        const sku = this.normalizeSku(sku_prefix ? `${sku_prefix}-${skuSuffix}` : skuSuffix);
+
+        await this.assertSkuAvailable(manager, sku);
 
         let inventoryItemId: number | undefined;
         if (create_inventory) {
-          const inventoryItem = await manager.save(
-            InventoryItem,
-            manager.create(InventoryItem, {
-              sku,
-              tracked: true,
-            }),
-          );
+          let inventoryItem: InventoryItem;
+          try {
+            inventoryItem = await manager.save(
+              InventoryItem,
+              manager.create(InventoryItem, {
+                sku,
+                tracked: true,
+              }),
+            );
+          } catch (error) {
+            if (this.isInventorySkuConstraintError(error)) {
+              this.throwInventorySkuConflict(sku);
+            }
+            throw error;
+          }
           inventoryItemId = inventoryItem.inventory_item_id;
         }
 
@@ -327,10 +431,19 @@ export class VariantService implements OnModuleInit {
         variants: variants.map((variant) => this.mapVariantWithTitle(variant)),
       };
     });
+
+    await this.syncProductSearch(product_id);
+    return generated;
   }
 
   async bulkUpdatePrices(input: BulkUpdateVariantPricesInput): Promise<BulkUpdateResponse> {
     const { variant_ids, price, compare_at_price } = input;
+
+    const touchedProducts = await this.variantRepo
+      .createQueryBuilder('variant')
+      .select('DISTINCT variant.product_id', 'product_id')
+      .where('variant.variant_id IN (:...variantIds)', { variantIds: variant_ids })
+      .getRawMany<{ product_id: string }>();
 
     await this.variantRepo.update(
       { variant_id: In(variant_ids) },
@@ -339,6 +452,16 @@ export class VariantService implements OnModuleInit {
         ...(compare_at_price !== undefined ? { compare_at_price } : {}),
       },
     );
+
+    const syncTasks: Promise<void>[] = [];
+    for (const row of touchedProducts) {
+      const productId = Number(row.product_id);
+      if (Number.isInteger(productId) && productId > 0) {
+        syncTasks.push(this.syncProductSearch(productId));
+      }
+    }
+
+    await Promise.all(syncTasks);
 
     return {
       updated: variant_ids.length,
