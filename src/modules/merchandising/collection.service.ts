@@ -1,6 +1,6 @@
 /**
  * Collection Service
- * Handles collection CRUD, rule evaluation, and product membership
+ * Handles collection CRUD, rule evaluation, product membership, and stale index reconciliation
  */
 
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
@@ -158,7 +158,6 @@ export class CollectionService {
 
     const collection = await this.collectionRepo.findOne({
       where: { collection_id: collectionId },
-      relations: ['rules'],
     });
 
     if (!collection) {
@@ -418,6 +417,14 @@ export class CollectionService {
     });
   }
 
+  private async syncCollectionsToSearchIndex(collections: Collection[]): Promise<void> {
+    if (!this.esEnabled || !this.esClient || collections.length === 0) {
+      return;
+    }
+
+    await Promise.all(collections.map((collection) => this.syncCollectionToSearchIndex(collection.collection_id).catch(() => undefined)));
+  }
+
   private getCachedCollectionBySlug(cacheKey: string): Collection | undefined {
     const cacheEntry = this.collectionBySlugCache.get(cacheKey);
     if (!cacheEntry) {
@@ -569,7 +576,7 @@ export class CollectionService {
       metafields: [],
       country_availability: [],
       country_codes: source.country_codes ?? [],
-    } as unknown as Product);
+    } as Product);
   }
 
   private isSearchDocumentAllowedForCountry(documentCountryCodes: string[] | undefined, countryCode?: string): boolean {
@@ -880,14 +887,13 @@ export class CollectionService {
   async findById(collectionId: number): Promise<Collection> {
     const collection = await this.collectionRepo.findOne({
       where: { collection_id: collectionId },
-      relations: ['rules'],
     });
 
     if (!collection) {
       throw new NotFoundException(`Collection ${collectionId} not found`);
     }
 
-    return collection;
+    return this.attachCollectionRules(collection);
   }
 
   async findBySlug(storeId: number, slug: string): Promise<Collection> {
@@ -912,14 +918,14 @@ export class CollectionService {
         // Fallback to DB if ES doesn't have the collection
         const collection = await this.collectionRepo.findOne({
           where: { store_id: storeId, slug },
-          relations: ['rules'],
         });
 
         if (!collection) {
           throw new NotFoundException(`Collection "${slug}" not found`);
         }
-        this.setCachedCollectionBySlug(cacheKey, collection);
-        return collection;
+        const hydrated = await this.attachCollectionRules(collection);
+        this.setCachedCollectionBySlug(cacheKey, hydrated);
+        return hydrated;
       })
       .finally(() => {
         this.collectionBySlugInflight.delete(cacheKey);
@@ -972,6 +978,29 @@ export class CollectionService {
     return query.getMany();
   }
 
+  private async removeStaleIndexedCollections(indexedCollections: Collection[]): Promise<Collection[]> {
+    const collectionIds = Array.from(new Set(indexedCollections.map((collection) => collection.collection_id).filter((id) => Number.isInteger(id) && id > 0)));
+
+    if (collectionIds.length === 0) {
+      return [];
+    }
+
+    const existingRows = await this.collectionRepo
+      .createQueryBuilder('c')
+      .select('c.collection_id', 'collection_id')
+      .where('c.collection_id IN (:...ids)', { ids: collectionIds })
+      .getRawMany<{ collection_id: number }>();
+
+    const existingIdSet = new Set(existingRows.map((row) => Number(row.collection_id)));
+    const staleIds = collectionIds.filter((id) => !existingIdSet.has(id));
+
+    if (staleIds.length > 0) {
+      await Promise.all(staleIds.map((collectionId) => this.deleteCollectionFromSearchIndex(collectionId).catch(() => undefined)));
+    }
+
+    return indexedCollections.filter((collection) => existingIdSet.has(collection.collection_id));
+  }
+
   private async attachCollectionRules(collection: Collection): Promise<Collection> {
     const rules = await this.collectionRuleRepo.find({
       where: { collection_id: collection.collection_id },
@@ -981,6 +1010,7 @@ export class CollectionService {
     collection.rules = rules;
     return collection;
   }
+
   // ============================================
   // MANUAL COLLECTION PRODUCTS
   // ============================================
@@ -1113,6 +1143,14 @@ export class CollectionService {
         }
 
         return this.getAutomatedCollectionProducts(collection, limit, offset, normalizedCountryCode);
+      })
+      .catch(async (error) => {
+        if (error instanceof NotFoundException) {
+          await this.deleteCollectionFromSearchIndex(collectionId).catch(() => undefined);
+          this.invalidateCollectionCaches();
+          return { products: [], total: 0 };
+        }
+        throw error;
       })
       .then((result) => {
         this.setCachedCollectionProducts(cacheKey, result);
@@ -1290,6 +1328,7 @@ export class CollectionService {
     const query = this.productRepo
       .createQueryBuilder('p')
       .leftJoin('p.variants', 'v')
+      .leftJoin('p.category', 'pc')
       .where('p.store_id = :storeId', { storeId })
       .select('DISTINCT p.product_id', 'product_id');
 
@@ -1319,7 +1358,7 @@ export class CollectionService {
         column = 'p.brand';
         break;
       case 'category':
-        column = 'p.category_id';
+        column = 'pc.category_id';
         break;
       case 'status':
         column = 'p.status';
@@ -1414,8 +1453,3 @@ export class CollectionService {
     }
   }
 }
-
-
-
-
-
