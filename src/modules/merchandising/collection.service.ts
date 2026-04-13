@@ -59,9 +59,9 @@ type IndexedCollectionDocument = {
 
 @Injectable()
 export class CollectionService {
-  private static readonly COLLECTIONS_CACHE_TTL_MS = 120_000;
-  private static readonly COLLECTION_BY_SLUG_CACHE_TTL_MS = 120_000;
-  private static readonly COLLECTION_PRODUCTS_CACHE_TTL_MS = 120_000;
+  private static readonly COLLECTIONS_CACHE_TTL_MS = 0;
+  private static readonly COLLECTION_BY_SLUG_CACHE_TTL_MS = 0;
+  private static readonly COLLECTION_PRODUCTS_CACHE_TTL_MS = 0;
   private static readonly DEFAULT_PRODUCT_DETAIL_INDEX = 'products_detail_v1';
   private static readonly DEFAULT_COLLECTION_INDEX = 'collections_v1';
   private readonly collectionsCache = new Map<string, { expiresAt: number; value: Collection[] }>();
@@ -376,12 +376,16 @@ export class CollectionService {
   }
 
   private getCachedCollectionProducts(cacheKey: string): { products: Product[]; total: number } | undefined {
+    if (CollectionService.COLLECTION_PRODUCTS_CACHE_TTL_MS <= 0) {
+      return undefined;
+    }
+
     const cacheEntry = this.collectionProductsCache.get(cacheKey);
     if (!cacheEntry) {
       return undefined;
     }
 
-    if (cacheEntry.expiresAt < Date.now()) {
+    if (cacheEntry.expiresAt <= Date.now()) {
       this.collectionProductsCache.delete(cacheKey);
       return undefined;
     }
@@ -390,6 +394,10 @@ export class CollectionService {
   }
 
   private setCachedCollectionProducts(cacheKey: string, value: { products: Product[]; total: number }): void {
+    if (CollectionService.COLLECTION_PRODUCTS_CACHE_TTL_MS <= 0) {
+      return;
+    }
+
     this.collectionProductsCache.set(cacheKey, {
       value,
       expiresAt: Date.now() + CollectionService.COLLECTION_PRODUCTS_CACHE_TTL_MS,
@@ -397,12 +405,16 @@ export class CollectionService {
   }
 
   private getCachedCollections(cacheKey: string): Collection[] | undefined {
+    if (CollectionService.COLLECTIONS_CACHE_TTL_MS <= 0) {
+      return undefined;
+    }
+
     const cacheEntry = this.collectionsCache.get(cacheKey);
     if (!cacheEntry) {
       return undefined;
     }
 
-    if (cacheEntry.expiresAt < Date.now()) {
+    if (cacheEntry.expiresAt <= Date.now()) {
       this.collectionsCache.delete(cacheKey);
       return undefined;
     }
@@ -411,6 +423,10 @@ export class CollectionService {
   }
 
   private setCachedCollections(cacheKey: string, value: Collection[]): void {
+    if (CollectionService.COLLECTIONS_CACHE_TTL_MS <= 0) {
+      return;
+    }
+
     this.collectionsCache.set(cacheKey, {
       value,
       expiresAt: Date.now() + CollectionService.COLLECTIONS_CACHE_TTL_MS,
@@ -426,12 +442,16 @@ export class CollectionService {
   }
 
   private getCachedCollectionBySlug(cacheKey: string): Collection | undefined {
+    if (CollectionService.COLLECTION_BY_SLUG_CACHE_TTL_MS <= 0) {
+      return undefined;
+    }
+
     const cacheEntry = this.collectionBySlugCache.get(cacheKey);
     if (!cacheEntry) {
       return undefined;
     }
 
-    if (cacheEntry.expiresAt < Date.now()) {
+    if (cacheEntry.expiresAt <= Date.now()) {
       this.collectionBySlugCache.delete(cacheKey);
       return undefined;
     }
@@ -440,6 +460,10 @@ export class CollectionService {
   }
 
   private setCachedCollectionBySlug(cacheKey: string, value: Collection): void {
+    if (CollectionService.COLLECTION_BY_SLUG_CACHE_TTL_MS <= 0) {
+      return;
+    }
+
     this.collectionBySlugCache.set(cacheKey, {
       value,
       expiresAt: Date.now() + CollectionService.COLLECTION_BY_SLUG_CACHE_TTL_MS,
